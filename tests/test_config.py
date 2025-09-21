@@ -83,8 +83,10 @@ class TestConfigManager:
         with patch('rss_mcp.config.user_config_dir') as mock_config_dir:
             mock_config_dir.return_value = "/tmp/rss-mcp"
             
-            manager = ConfigManager()
-            assert manager.config_path == Path("/tmp/rss-mcp/config.json")
+            # Clear environment variables to use default behavior
+            with patch.dict('os.environ', {}, clear=True):
+                manager = ConfigManager()
+                assert manager.config_path == Path("/tmp/rss-mcp/default/config.json")
     
     def test_save_and_load(self, temp_dir):
         """Test saving and loading configuration."""
@@ -231,19 +233,19 @@ class TestGlobalConfigManager:
 class TestEnvironmentVariables:
     """Test environment variable support."""
     
-    def test_config_path_from_env_var(self, temp_dir):
-        """Test RSS_MCP_CONFIG environment variable."""
-        config_path = temp_dir / "custom_config.json"
+    def test_config_dir_from_env_var(self, temp_dir):
+        """Test RSS_MCP_CONFIG_DIR environment variable."""
+        config_dir = temp_dir / "custom_config"
         
-        with patch.dict('os.environ', {'RSS_MCP_CONFIG': str(config_path)}):
-            manager = ConfigManager()
-            assert manager.config_path == config_path
+        with patch.dict('os.environ', {'RSS_MCP_CONFIG_DIR': str(config_dir)}):
+            manager = ConfigManager(user_id="testuser")
+            expected_path = config_dir / "testuser" / "config.json"
+            assert manager.config_path == expected_path
     
     def test_cache_path_from_env_var(self, temp_dir):
-        """Test RSS_MCP_CACHE environment variable."""
-        cache_path = temp_dir / "custom_cache"
-        
-        with patch.dict('os.environ', {'RSS_MCP_CACHE': str(cache_path)}):
+        """Test RSS_MCP_CACHE_DIR environment variable."""
+        cache_path = temp_dir / "custom_cache_dir" 
+        with patch.dict('os.environ', {'RSS_MCP_CACHE_DIR': str(cache_path)}):
             config = RSSConfig()
             assert config.cache_path == str(cache_path)
             assert Path(cache_path).exists()
@@ -255,7 +257,7 @@ class TestEnvironmentVariables:
                 mock_config_dir.return_value = "/tmp/rss-mcp"
                 
                 manager = ConfigManager()
-                assert manager.config_path == Path("/tmp/rss-mcp/config.json")
+                assert manager.config_path == Path("/tmp/rss-mcp/default/config.json")
     
     def test_cache_fallback_to_default(self):
         """Test fallback to default cache path when env var not set."""
@@ -268,27 +270,28 @@ class TestEnvironmentVariables:
     
     def test_explicit_path_overrides_env_var(self, temp_dir):
         """Test that explicit path parameter overrides environment variable."""
-        env_config_path = temp_dir / "env_config.json"
+        env_config_dir = temp_dir / "env_config_dir"
         explicit_config_path = temp_dir / "explicit_config.json"
         
-        with patch.dict('os.environ', {'RSS_MCP_CONFIG': str(env_config_path)}):
+        with patch.dict('os.environ', {'RSS_MCP_CONFIG_DIR': str(env_config_dir)}):
             manager = ConfigManager(config_path=explicit_config_path)
             assert manager.config_path == explicit_config_path
     
     def test_env_vars_isolation(self, temp_dir):
         """Test that environment variables are properly isolated in tests."""
         # This test ensures our test fixtures properly isolate environment variables
-        config_path = temp_dir / "test_config.json"
+        config_dir = temp_dir / "test_config_dir"
         cache_path = temp_dir / "test_cache"
         
         with patch.dict('os.environ', {
-            'RSS_MCP_CONFIG': str(config_path),
-            'RSS_MCP_CACHE': str(cache_path)
+            'RSS_MCP_CONFIG_DIR': str(config_dir),
+            'RSS_MCP_CACHE_DIR': str(cache_path)
         }):
-            manager = ConfigManager()
+            manager = ConfigManager(user_id="testuser")
             config = RSSConfig()
             
-            assert manager.config_path == config_path
+            expected_config_path = config_dir / "testuser" / "config.json"
+            assert manager.config_path == expected_config_path
             assert config.cache_path == str(cache_path)
             assert Path(cache_path).exists()
     
@@ -296,7 +299,7 @@ class TestEnvironmentVariables:
         """Test that cache directory is created automatically."""
         cache_path = temp_dir / "nested" / "cache" / "dir"
         
-        with patch.dict('os.environ', {'RSS_MCP_CACHE': str(cache_path)}):
+        with patch.dict('os.environ', {'RSS_MCP_CACHE_DIR': str(cache_path)}):
             config = RSSConfig()
             assert config.cache_path == str(cache_path)
             assert cache_path.exists()

@@ -45,18 +45,64 @@ class FeedFetcher:
         if self._session and not self._session.closed:
             await self._session.close()
     
-    async def fetch_feed_content(self, url: str) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Fetch feed content from URL.
+    async def fetch_feed_content(self, url: str, use_cache: bool = True, cache_hours: int = 1) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Fetch feed content from URL with optional caching.
+        
+        Args:
+            url: RSS feed URL to fetch
+            use_cache: Whether to use cached content if available
+            cache_hours: Maximum age of cache in hours
         
         Returns:
             (success, content, error_message)
         """
+        # Check cache first if enabled
+        if use_cache:
+            cached_data = self.storage.get_cached_feed_content(url, cache_hours)
+            if cached_data:
+                logger.info(f"Using cached content for {url}")
+                return True, cached_data["content"], None
+        
         try:
             session = await self._get_session()
             
-            async with session.get(url) as response:
-                if response.status == 200:
+            # Build headers for conditional requests
+            headers = {}
+            if use_cache:
+                cached_data = self.storage.get_cached_feed_content(url, max_age_hours=24*7)  # Check cache up to 1 week
+                if cached_data:
+                    if cached_data.get("etag"):
+                        headers["If-None-Match"] = cached_data["etag"]
+                    if cached_data.get("last_modified"):
+                        headers["If-Modified-Since"] = cached_data["last_modified"]
+            
+            async with session.get(url, headers=headers) as response:
+                if response.status == 304:
+                    # Not modified, use cached content
+                    cached_data = self.storage.get_cached_feed_content(url, max_age_hours=24*7)
+                    if cached_data:
+                        logger.info(f"Content not modified for {url}, using cache")
+                        return True, cached_data["content"], None
+                    else:
+                        return False, None, "Content not modified but no cache available"
+                        
+                elif response.status == 200:
                     content = await response.text()
+                    
+                    # Cache the content if enabled
+                    if use_cache:
+                        last_modified_str = response.headers.get("last-modified")
+                        last_modified = None
+                        if last_modified_str:
+                            try:
+                                from email.utils import parsedate_to_datetime
+                                last_modified = parsedate_to_datetime(last_modified_str)
+                            except Exception:
+                                pass
+                        
+                        etag = response.headers.get("etag")
+                        self.storage.cache_feed_content(url, content, last_modified, etag)
+                    
                     return True, content, None
                 else:
                     error = f"HTTP {response.status}: {response.reason}"

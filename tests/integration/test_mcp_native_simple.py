@@ -43,8 +43,8 @@ class TestMCPServerDirect:
             json.dump(config_data, f)
         
         # Set environment variables
-        os.environ["RSS_MCP_CONFIG"] = str(config_path)
-        os.environ["RSS_MCP_CACHE"] = str(cache_path)
+        os.environ["RSS_MCP_CONFIG_DIR"] = str(config_path.parent / "config")
+        os.environ["RSS_MCP_CACHE_DIR"] = str(cache_path)
         
         # Create and return config - it will load automatically from env vars
         config_manager = get_config_manager()
@@ -212,8 +212,8 @@ class TestMCPHTTPServerDirect:
         with open(config_path, 'w') as f:
             json.dump(config_data, f)
         
-        os.environ["RSS_MCP_CONFIG"] = str(config_path)
-        os.environ["RSS_MCP_CACHE"] = str(cache_path)
+        os.environ["RSS_MCP_CONFIG_DIR"] = str(config_path.parent / "config")
+        os.environ["RSS_MCP_CACHE_DIR"] = str(cache_path)
         
         # Start server in background
         import subprocess

@@ -36,8 +36,8 @@ def temp_dir():
         
         # Set environment variables to use temporary directories
         with patch.dict('os.environ', {
-            'RSS_MCP_CONFIG': str(config_path),
-            'RSS_MCP_CACHE': str(cache_path)
+            'RSS_MCP_CONFIG_DIR': str(tmpdir_path / "config"),
+            'RSS_MCP_CACHE_DIR': str(cache_path)
         }):
             yield tmpdir_path
 
@@ -45,7 +45,7 @@ def temp_dir():
 @pytest.fixture
 def integration_config(temp_dir):
     """Create integration test configuration."""
-    # The cache_path will be set automatically via RSS_MCP_CACHE env var
+    # The cache_path will be set automatically via RSS_MCP_CACHE_DIR env var
     config = RSSConfig(
         default_fetch_interval=3600,
         max_entries_per_feed=100,
@@ -116,8 +116,8 @@ class ServerProcess:
         
         # Config path is already set via the temp_dir fixture's environment patch
         # But we'll set it again to ensure it matches our config file
-        self.env["RSS_MCP_CONFIG"] = str(self.config_path)
-        self.env["RSS_MCP_CACHE"] = str(self.config_path.parent / "cache")
+        self.env["RSS_MCP_CONFIG_DIR"] = str(self.config_path.parent / "config")
+        self.env["RSS_MCP_CACHE_DIR"] = str(self.config_path.parent / "cache")
         
         self.process = subprocess.Popen(
             cmd,
@@ -253,8 +253,8 @@ def cli_wrapper(temp_dir, integration_config):
         def __init__(self, config_path: Path):
             self.config_path = config_path
             self.env = os.environ.copy()
-            self.env["RSS_MCP_CONFIG"] = str(config_path)
-            self.env["RSS_MCP_CACHE"] = str(config_path.parent / "cache")
+            self.env["RSS_MCP_CONFIG_DIR"] = str(config_path.parent / "config")
+            self.env["RSS_MCP_CACHE_DIR"] = str(config_path.parent / "cache")
         
         def run_command(self, cmd: List[str], timeout: int = 30) -> subprocess.CompletedProcess:
             """Run RSS MCP CLI command."""

@@ -50,8 +50,8 @@ class TestMCPNativeHTTPClient:
         
         # Set environment variables
         env = os.environ.copy()
-        env["RSS_MCP_CONFIG"] = str(config_path)
-        env["RSS_MCP_CACHE"] = str(cache_path)
+        env["RSS_MCP_CONFIG_DIR"] = str(config_path.parent / "config")
+        env["RSS_MCP_CACHE_DIR"] = str(cache_path)
         
         # Start server process
         import subprocess

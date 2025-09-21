@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
@@ -23,7 +25,7 @@ from mcp.types import (
 from dateutil import parser as date_parser
 from pydantic import BaseModel
 
-from .config import get_config_manager, RSSConfig
+from .config import get_config_manager, RSSConfig, get_user_id
 from .feed_manager import FeedFetcher
 from .models import RSSFeed, RSSSource
 from .storage import RSSStorage
@@ -35,10 +37,16 @@ logger = logging.getLogger(__name__)
 class RSSMCPServer:
     """RSS MCP Server with both stdio and HTTP transports."""
     
-    def __init__(self):
-        """Initialize the server."""
+    def __init__(self, user_id: Optional[str] = None, headers: Optional[Dict[str, str]] = None):
+        """Initialize the server.
+        
+        Args:
+            user_id: User ID for per-user configuration
+            headers: Optional HTTP headers for extracting user ID
+        """
         self.server = Server("rss-mcp")
-        self.config_manager = get_config_manager()
+        self.current_user_id = user_id or get_user_id(headers)
+        self.config_manager = get_config_manager(user_id=self.current_user_id, headers=headers)
         self.config = self.config_manager.config
         self.storage = RSSStorage(Path(self.config.cache_path))
         self.fetcher = FeedFetcher(self.config, self.storage)
@@ -574,16 +582,18 @@ class RSSMCPServer:
         self.config_manager.stop_watching()
 
 
-# Global server instance
-_server_instance: Optional[RSSMCPServer] = None
+# Global server instances per user
+_server_instances: Dict[str, RSSMCPServer] = {}
 
 
-def get_server() -> RSSMCPServer:
-    """Get the global server instance."""
-    global _server_instance
-    if _server_instance is None:
-        _server_instance = RSSMCPServer()
-    return _server_instance
+def get_server(user_id: Optional[str] = None, headers: Optional[Dict[str, str]] = None) -> RSSMCPServer:
+    """Get the server instance for a specific user."""
+    effective_user_id = user_id or get_user_id(headers)
+    
+    if effective_user_id not in _server_instances:
+        _server_instances[effective_user_id] = RSSMCPServer(effective_user_id, headers)
+    
+    return _server_instances[effective_user_id]
 
 
 async def run_stdio_server():
@@ -608,13 +618,8 @@ async def run_stdio_server():
 
 async def run_http_server(host: str = "localhost", port: int = 8080):
     """Run the MCP server in HTTP mode."""
-    server = get_server()
-    
     # Create FastAPI app
     app = FastAPI(title="RSS MCP Server", version="1.0.0")
-    
-    # Start config watching
-    server.config_manager.start_watching()
     
     class ToolCallRequest(BaseModel):
         name: str
@@ -622,11 +627,43 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     
     @app.get("/")
     async def root():
-        return {"message": "RSS MCP Server", "version": "1.0.0"}
+        return {
+            "message": "RSS MCP Server", 
+            "version": "1.0.0",
+            "endpoints": {
+                "mcp": {
+                    "tools": "/mcp/tools",
+                    "call-tool": "/mcp/call-tool",
+                    "health": "/mcp/health",
+                    "user-info": "/mcp/user-info"
+                },
+                "sse": {
+                    "feed-updates": "/sse/feed-updates",
+                    "tool-calls": "/sse/tool-calls"
+                }
+            }
+        }
     
-    @app.get("/tools")
-    async def list_tools():
-        """List available tools."""
+    # MCP HTTP Routes
+    @app.get("/mcp/health")
+    async def health_check():
+        """Health check endpoint."""
+        return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    
+    @app.get("/mcp/user-info")
+    async def user_info(request: Request):
+        """Get current user information."""
+        headers = dict(request.headers)
+        user_id = get_user_id(headers)
+        return {"user_id": user_id, "headers_provided": bool(headers.get("X-User-ID"))}
+    
+    @app.get("/mcp/tools")
+    async def list_tools(request: Request):
+        """List available MCP tools."""
+        # Get user-specific server instance
+        headers = dict(request.headers)
+        server = get_server(headers=headers)
+        
         # Get the list tools handler function
         list_tools_handler = None
         for handler in server.server._tool_list_handlers:
@@ -639,10 +676,14 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
         else:
             return {"tools": []}
     
-    @app.post("/call-tool")
-    async def call_tool(request: ToolCallRequest):
-        """Call a tool."""
+    @app.post("/mcp/call-tool")
+    async def call_tool(request: ToolCallRequest, http_request: Request):
+        """Call an MCP tool."""
         try:
+            # Get user-specific server instance
+            headers = dict(http_request.headers)
+            server = get_server(headers=headers)
+            
             # Get the call tool handler function
             call_tool_handler = None
             for handler in server.server._tool_call_handlers:
@@ -657,6 +698,81 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
     
+    # SSE Routes
+    @app.get("/sse/feed-updates")
+    async def sse_feed_updates(request: Request):
+        """Server-Sent Events for real-time feed updates."""
+        headers = dict(request.headers)
+        user_id = get_user_id(headers)
+        
+        async def event_generator():
+            """Generate SSE events for feed updates."""
+            try:
+                # Send initial connection event
+                yield {
+                    "event": "connected",
+                    "data": f'{{"user_id": "{user_id}", "message": "Connected to RSS MCP feed updates"}}'
+                }
+                
+                # Get user-specific server instance
+                server = get_server(headers=headers)
+                
+                # Simulate feed update monitoring
+                # In a real implementation, this would listen to feed changes
+                import asyncio
+                counter = 0
+                while True:
+                    await asyncio.sleep(30)  # Check every 30 seconds
+                    counter += 1
+                    
+                    # Get feed stats as an example
+                    feed_stats = server.storage.get_feed_stats()
+                    
+                    yield {
+                        "event": "feed-update",
+                        "data": f'{{"user_id": "{user_id}", "timestamp": "{datetime.now().isoformat()}", "total_entries": {feed_stats.total_entries}, "check_number": {counter}}}'
+                    }
+                    
+            except Exception as e:
+                yield {
+                    "event": "error",
+                    "data": f'{{"error": "{str(e)}"}}'
+                }
+        
+        return EventSourceResponse(event_generator())
+    
+    @app.get("/sse/tool-calls")  
+    async def sse_tool_calls(request: Request):
+        """Server-Sent Events for tool call notifications."""
+        headers = dict(request.headers)
+        user_id = get_user_id(headers)
+        
+        async def event_generator():
+            """Generate SSE events for tool calls."""
+            try:
+                yield {
+                    "event": "connected", 
+                    "data": f'{{"user_id": "{user_id}", "message": "Connected to RSS MCP tool call notifications"}}'
+                }
+                
+                # This would be implemented with a proper event system
+                # For now, just keep the connection alive
+                import asyncio
+                while True:
+                    await asyncio.sleep(60)  # Keep alive ping
+                    yield {
+                        "event": "ping",
+                        "data": f'{{"timestamp": "{datetime.now().isoformat()}"}}'
+                    }
+                    
+            except Exception as e:
+                yield {
+                    "event": "error",
+                    "data": f'{{"error": "{str(e)}"}}'
+                }
+        
+        return EventSourceResponse(event_generator())
+    
     # Configure server
     config = uvicorn.Config(
         app,
@@ -670,7 +786,9 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     try:
         await server_instance.serve()
     finally:
-        await server.cleanup()
+        # Cleanup all server instances
+        for server in _server_instances.values():
+            await server.cleanup()
 
 
 if __name__ == "__main__":

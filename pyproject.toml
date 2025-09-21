@@ -10,14 +10,13 @@ authors = [
 maintainers = [
     { name = "xz-dev", email = "xiangzhedev@gmail.com" }
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["mcp", "rss", "feed", "aggregator", "model-context-protocol", "llm", "ai"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -40,6 +39,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "watchdog>=3.0.0",
     "platformdirs>=4.4.0",
+    "sse-starlette>=3.0.2",
 ]
 
 [project.urls]
@@ -175,3 +175,9 @@ exclude = [
 [build-system]
 requires = ["setuptools>=69.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+]

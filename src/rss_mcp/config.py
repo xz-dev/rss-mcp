@@ -15,6 +15,35 @@ from watchdog.observers import Observer
 logger = logging.getLogger(__name__)
 
 
+def get_user_id(headers: Optional[Dict[str, str]] = None) -> str:
+    """Get user ID from headers or environment variable.
+    
+    Args:
+        headers: Optional HTTP headers dictionary to check for X-User-ID (case insensitive)
+        
+    Returns:
+        User ID string, defaults to "default" if not found
+    """
+    # Check HTTP headers first (for HTTP/SSE mode)
+    # Headers are case-insensitive, so normalize to lowercase for lookup
+    if headers:
+        # Create a case-insensitive header lookup
+        lower_headers = {k.lower(): v for k, v in headers.items()}
+        if "x-user-id" in lower_headers:
+            user_id = lower_headers["x-user-id"].strip()
+            if user_id:
+                return user_id
+    
+    # Check environment variable (for stdio mode)  
+    # Environment variables are case-sensitive, must be exact: RSS_MCP_USER
+    user_id = os.getenv("RSS_MCP_USER", "").strip()
+    if user_id:
+        return user_id
+    
+    # Default fallback
+    return "default"
+
+
 @dataclass
 class RSSConfig:
     """RSS MCP server configuration."""
@@ -49,8 +78,8 @@ class RSSConfig:
     def __post_init__(self):
         """Set defaults after initialization."""
         if not self.cache_path:
-            # Check environment variable first
-            cache_path = os.getenv("RSS_MCP_CACHE")
+            # Check environment variable
+            cache_path = os.getenv("RSS_MCP_CACHE_DIR")
             if cache_path:
                 cache_dir = Path(cache_path)
             else:
@@ -89,21 +118,28 @@ class ConfigWatcher(FileSystemEventHandler):
 class ConfigManager:
     """Manages RSS configuration with auto-reload support."""
     
-    def __init__(self, config_path: Optional[Path] = None):
+    def __init__(self, config_path: Optional[Path] = None, user_id: Optional[str] = None, headers: Optional[Dict[str, str]] = None):
         """Initialize configuration manager.
         
         Args:
             config_path: Path to config file. If None, uses environment variable or default location.
+            user_id: User ID for per-user configuration. If None, gets from headers or environment.
+            headers: Optional HTTP headers for extracting user ID.
         """
         if config_path is None:
-            # Check environment variable first
-            env_config_path = os.getenv("RSS_MCP_CONFIG")
-            if env_config_path:
-                self.config_path = Path(env_config_path)
+            # Get user ID for per-user config
+            if user_id is None:
+                user_id = get_user_id(headers)
+            
+            # Check for custom config base directory
+            config_base = os.getenv("RSS_MCP_CONFIG_DIR")
+            if config_base:
+                config_dir = Path(config_base) / user_id
             else:
-                config_dir = Path(user_config_dir("rss-mcp"))
-                config_dir.mkdir(parents=True, exist_ok=True)
-                self.config_path = config_dir / "config.json"
+                config_dir = Path(user_config_dir("rss-mcp")) / user_id
+            
+            config_dir.mkdir(parents=True, exist_ok=True)
+            self.config_path = config_dir / "config.json"
         else:
             self.config_path = Path(config_path)
         
@@ -232,18 +268,18 @@ class ConfigManager:
         self.stop_watching()
 
 
-# Global config manager instance
-_config_manager: Optional[ConfigManager] = None
+# Global config manager instances per user
+_config_managers: Dict[str, ConfigManager] = {}
 
 
-def get_config_manager(config_path: Optional[Path] = None) -> ConfigManager:
-    """Get the global config manager instance."""
-    global _config_manager
+def get_config_manager(config_path: Optional[Path] = None, user_id: Optional[str] = None, headers: Optional[Dict[str, str]] = None) -> ConfigManager:
+    """Get the config manager instance for a specific user."""
+    effective_user_id = user_id or get_user_id(headers)
     
-    if _config_manager is None:
-        _config_manager = ConfigManager(config_path)
+    if effective_user_id not in _config_managers:
+        _config_managers[effective_user_id] = ConfigManager(config_path, effective_user_id, headers)
     
-    return _config_manager
+    return _config_managers[effective_user_id]
 
 
 def get_config() -> RSSConfig:

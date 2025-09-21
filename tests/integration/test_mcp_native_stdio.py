@@ -44,8 +44,8 @@ class TestMCPNativeStdioClient:
         with open(config_path, 'w') as f:
             json.dump(config_data, f)
         
-        env["RSS_MCP_CONFIG"] = str(config_path)
-        env["RSS_MCP_CACHE"] = str(cache_path)
+        env["RSS_MCP_CONFIG_DIR"] = str(config_path.parent / "config")
+        env["RSS_MCP_CACHE_DIR"] = str(cache_path)
         
         # Use the actual server command
         server = StdioServerParameters(

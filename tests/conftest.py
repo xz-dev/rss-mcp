@@ -34,8 +34,8 @@ def temp_dir():
         
         # Set environment variables to use temporary directories
         with patch.dict('os.environ', {
-            'RSS_MCP_CONFIG': str(config_path),
-            'RSS_MCP_CACHE': str(cache_path)
+            'RSS_MCP_CONFIG_DIR': str(tmpdir_path / "config"),
+            'RSS_MCP_CACHE_DIR': str(cache_path)
         }):
             yield tmpdir_path
 
@@ -43,7 +43,7 @@ def temp_dir():
 @pytest.fixture
 def test_config(temp_dir):
     """Create test configuration."""
-    # The cache_path will be set automatically via RSS_MCP_CACHE env var
+    # The cache_path will be set automatically via RSS_MCP_CACHE_DIR env var
     config = RSSConfig(
         default_fetch_interval=3600,
         max_entries_per_feed=100,
@@ -58,7 +58,7 @@ def test_config(temp_dir):
 @pytest.fixture
 def config_manager(temp_dir, test_config):
     """Create test configuration manager."""
-    # ConfigManager will use RSS_MCP_CONFIG env var set by temp_dir fixture
+    # ConfigManager will use RSS_MCP_CONFIG_DIR env var set by temp_dir fixture
     manager = ConfigManager()
     manager.config = test_config
     manager.save()

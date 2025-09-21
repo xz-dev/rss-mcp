@@ -1,13 +1,18 @@
 """JSON-based file storage layer for RSS MCP server."""
 
+import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from uuid import uuid4
 
 from .models import RSSEntry, RSSFeed, RSSSource, FeedStats
+
+
+logger = logging.getLogger(__name__)
 
 
 class RSSStorage:
@@ -26,6 +31,17 @@ class RSSStorage:
         # Create directories
         for dir_path in [self.feeds_dir, self.sources_dir, self.entries_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
+    
+    def _get_url_hash(self, url: str) -> str:
+        """Generate SHA256 hash of URL for cache key.
+        
+        Args:
+            url: The URL to hash
+            
+        Returns:
+            Hexadecimal hash string
+        """
+        return hashlib.sha256(url.encode('utf-8')).hexdigest()
     
     # Feed operations
     def create_feed(self, feed: RSSFeed) -> bool:
@@ -603,3 +619,93 @@ class RSSStorage:
             return datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
         except (ValueError, AttributeError):
             return None
+    
+    # URL-based caching methods
+    def cache_feed_content(self, url: str, content: str, last_modified: Optional[datetime] = None, etag: Optional[str] = None) -> bool:
+        """Cache RSS feed content by URL hash.
+        
+        Args:
+            url: RSS feed URL
+            content: Raw RSS content
+            last_modified: Last modified timestamp
+            etag: HTTP ETag value
+            
+        Returns:
+            True if cached successfully
+        """
+        try:
+            url_hash = self._get_url_hash(url)
+            cache_dir = self.cache_path / url_hash
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            
+            cache_data = {
+                "url": url,
+                "content": content,
+                "cached_at": datetime.now().isoformat(),
+                "last_modified": last_modified.isoformat() if last_modified else None,
+                "etag": etag
+            }
+            
+            cache_file = cache_dir / "content.json"
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2, ensure_ascii=False)
+            
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to cache content for {url}: {e}")
+            return False
+    
+    def get_cached_feed_content(self, url: str, max_age_hours: int = 1) -> Optional[Dict[str, Any]]:
+        """Get cached RSS feed content by URL hash.
+        
+        Args:
+            url: RSS feed URL
+            max_age_hours: Maximum age of cache in hours
+            
+        Returns:
+            Cached content data or None if not found/expired
+        """
+        try:
+            url_hash = self._get_url_hash(url)
+            cache_file = self.cache_path / url_hash / "content.json"
+            
+            if not cache_file.exists():
+                return None
+            
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            # Check cache age
+            cached_at = self._parse_datetime(cache_data.get("cached_at"))
+            if cached_at:
+                age_hours = (datetime.now() - cached_at).total_seconds() / 3600
+                if age_hours > max_age_hours:
+                    return None
+            
+            return cache_data
+        except Exception as e:
+            logger.warning(f"Failed to get cached content for {url}: {e}")
+            return None
+    
+    def clear_url_cache(self, url: str) -> bool:
+        """Clear cached content for a specific URL.
+        
+        Args:
+            url: RSS feed URL to clear cache for
+            
+        Returns:
+            True if cleared successfully
+        """
+        try:
+            url_hash = self._get_url_hash(url)
+            cache_dir = self.cache_path / url_hash
+            
+            if cache_dir.exists():
+                for file in cache_dir.glob("*"):
+                    file.unlink()
+                cache_dir.rmdir()
+            
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to clear cache for {url}: {e}")
+            return False
