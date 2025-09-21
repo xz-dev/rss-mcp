@@ -1,10 +1,8 @@
-# Multi-stage build for RSS MCP Server
-FROM python:3.13-slim AS builder
+# RSS MCP Server Container
+FROM python:3.13-slim
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+# Create application directories
+RUN mkdir -p /app/config /app/cache
 
 WORKDIR /app
 
@@ -15,18 +13,6 @@ COPY src/ ./src/
 # Install the package
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir .
-
-# Final runtime stage
-FROM python:3.13-slim
-
-# Create application directories
-RUN mkdir -p /app/config /app/cache
-
-WORKDIR /app
-
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin/rss-mcp /usr/local/bin/rss-mcp
 
 # Config and cache directories will be created at runtime as needed
 
