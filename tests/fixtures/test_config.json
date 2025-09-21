@@ -1,0 +1,17 @@
+{
+  "cache_path": "test_cache",
+  "default_fetch_interval": 900,
+  "max_entries_per_feed": 50,
+  "cleanup_days": 7,
+  "http_host": "127.0.0.1",
+  "http_port": 0,
+  "request_timeout": 10,
+  "max_retries": 2,
+  "retry_delay": 30,
+  "user_agent": "RSS-MCP-IntegrationTest/1.0",
+  "max_concurrent_fetches": 3,
+  "rate_limit_requests": 50,
+  "rate_limit_period": 3600,
+  "log_level": "DEBUG",
+  "log_file": null
+}
