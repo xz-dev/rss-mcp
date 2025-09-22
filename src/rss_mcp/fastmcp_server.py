@@ -67,6 +67,7 @@ def _register_tools(server: FastMCP, storage: RSSStorage, feed_fetcher: FeedFetc
                     {
                         "name": feed.name,
                         "title": feed.title,
+                        "remote_title": feed.remote_title,
                         "description": feed.description,
                         "link": feed.link,
                         "enabled": feed.enabled,
@@ -116,6 +117,33 @@ def _register_tools(server: FastMCP, storage: RSSStorage, feed_fetcher: FeedFetc
                 return {"success": False, "error": "Feed not found"}
         except Exception as e:
             logger.error(f"Error removing feed for user {user_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    @server.tool()
+    def update_feed(name: str, title: str = None, description: str = None, link: str = None, active: bool = None) -> Dict[str, Any]:
+        """Update an RSS feed's properties."""
+        try:
+            feed = storage.get_feed(name)
+            if not feed:
+                return {"success": False, "error": "Feed not found"}
+            
+            # Update only the provided fields
+            if title is not None:
+                feed.title = title
+            if description is not None:
+                feed.description = description
+            if link is not None:
+                feed.link = link
+            if active is not None:
+                feed.active = active
+            
+            result = storage.update_feed(feed)
+            if result:
+                return {"success": True, "message": f"Feed '{name}' updated successfully"}
+            else:
+                return {"success": False, "error": "Failed to update feed"}
+        except Exception as e:
+            logger.error(f"Error updating feed for user {user_id}: {e}")
             return {"success": False, "error": str(e)}
 
     @server.tool()
@@ -278,6 +306,7 @@ def _register_resources(server: FastMCP, storage: RSSStorage, user_id: str):
                     {
                         "name": feed.name,
                         "title": feed.title,
+                        "remote_title": feed.remote_title,
                         "description": feed.description,
                         "enabled": feed.enabled,
                         "source_count": len(feed.sources),

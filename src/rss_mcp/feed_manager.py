@@ -302,7 +302,7 @@ class FeedFetcher:
 
                 # Update feed metadata from successful source
                 if hasattr(parsed_feed.feed, "title") and parsed_feed.feed.title:
-                    feed.title = parsed_feed.feed.title
+                    feed.remote_title = parsed_feed.feed.title  # Save remote title separately
                 if hasattr(parsed_feed.feed, "description") and parsed_feed.feed.description:
                     feed.description = parsed_feed.feed.description
                 if hasattr(parsed_feed.feed, "link") and parsed_feed.feed.link:

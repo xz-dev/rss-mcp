@@ -46,6 +46,7 @@ class RSSFeed:
 
     name: str = ""
     title: str = ""
+    remote_title: str = ""  # Title from RSS feed source
     description: str = ""
     link: str = ""
     sources: List[RSSSource] = field(default_factory=list)

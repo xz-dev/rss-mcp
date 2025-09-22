@@ -3,7 +3,7 @@
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -51,6 +51,7 @@ class RSSStorage:
         feed_data = {
             "name": feed.name,
             "title": feed.title,
+            "remote_title": feed.remote_title,
             "description": feed.description,
             "link": feed.link,
             "active": feed.active,
@@ -80,6 +81,7 @@ class RSSStorage:
             feed = RSSFeed(
                 name=data["name"],
                 title=data["title"],
+                remote_title=data.get("remote_title", ""),  # Use get() for backward compatibility
                 description=data["description"],
                 link=data["link"],
                 active=data["active"],
@@ -107,6 +109,7 @@ class RSSStorage:
         feed_data = {
             "name": feed.name,
             "title": feed.title,
+            "remote_title": feed.remote_title,
             "description": feed.description,
             "link": feed.link,
             "active": feed.active,
@@ -560,7 +563,7 @@ class RSSStorage:
                     last_update = feed.last_success
 
         # Calculate time-based entry counts
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         entries_last_24h = self.get_entry_count(
             feed_name=feed_name, start_time=now - timedelta(days=1), end_time=now
         )
@@ -631,7 +634,12 @@ class RSSStorage:
         if not dt_str:
             return None
         try:
-            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            # Replace "Z" with "+00:00" for ISO format compatibility
+            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            # If the datetime is offset-naive, assume it's UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except (ValueError, AttributeError):
             return None
 
