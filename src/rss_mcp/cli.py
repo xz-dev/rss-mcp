@@ -418,11 +418,11 @@ def serve():
 
 @serve.command("stdio")
 def serve_stdio():
-    """Start MCP server in stdio mode using FastMCP."""
-    from .fastmcp_server import run_fastmcp_stdio
+    """Start MCP server in stdio mode with multi-user support."""
+    from .fastmcp_multiuser import run_multiuser_fastmcp_stdio
 
     try:
-        asyncio.run(run_fastmcp_stdio())
+        asyncio.run(run_multiuser_fastmcp_stdio())
     except KeyboardInterrupt:
         click.echo("\nServer stopped")
     except Exception as e:
@@ -434,12 +434,12 @@ def serve_stdio():
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", type=int, default=8080, help="Port to bind to")
 def serve_http(host, port):
-    """Start MCP server in HTTP mode using FastMCP."""
-    from .fastmcp_server import run_fastmcp_http
-
+    """Start MCP server in HTTP mode with multi-user support."""
+    from .fastmcp_multiuser import run_multiuser_fastmcp_server
+    
     try:
         click.echo(f"Starting RSS MCP server in HTTP mode on {host}:{port}")
-        asyncio.run(run_fastmcp_http(host, port))
+        asyncio.run(run_multiuser_fastmcp_server(host, port))
     except KeyboardInterrupt:
         click.echo("\nServer stopped")
     except Exception as e:

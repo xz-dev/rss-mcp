@@ -21,7 +21,7 @@ from mcp.types import (
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from .config import RSSConfig, get_config_manager, get_user_id
+from .config import RSSConfig, get_config_manager, get_user_id, get_user_id_safe
 from .feed_manager import FeedFetcher
 from .models import RSSFeed, RSSSource
 from .storage import RSSStorage
@@ -576,6 +576,29 @@ def get_server(
     return _server_instances[effective_user_id]
 
 
+def get_server_safe(
+    user_id: Optional[str] = None, headers: Optional[Dict[str, str]] = None
+) -> tuple[Optional[RSSMCPServer], Optional[str]]:
+    """Safely get the server instance for a specific user without raising exceptions.
+    
+    Returns:
+        Tuple of (server_instance, error_message). If error_message is not None,
+        the HTTP request should return an error response.
+    """
+    try:
+        effective_user_id, error_msg = get_user_id_safe(headers) if not user_id else (user_id, None)
+        
+        if error_msg:
+            return None, error_msg
+            
+        if effective_user_id not in _server_instances:
+            _server_instances[effective_user_id] = RSSMCPServer(effective_user_id, headers)
+
+        return _server_instances[effective_user_id], None
+    except Exception as e:
+        return None, f"Failed to create server instance: {str(e)}"
+
+
 async def run_stdio_server():
     """Run the MCP server in stdio mode."""
     server = get_server()
@@ -697,10 +720,14 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     @app.get("/mcp/tools")
     async def list_tools(request: Request):
         """List available MCP tools."""
-        # Get user-specific server instance
+        # Get user-specific server instance safely
         headers = dict(request.headers)
         logger.info(f"List tools endpoint - Headers: {headers}")
-        server = get_server(headers=headers)
+        
+        server, error_msg = get_server_safe(headers=headers)
+        if error_msg:
+            logger.warning(f"List tools endpoint - Access denied: {error_msg}")
+            raise HTTPException(status_code=401, detail=error_msg)
 
         # Get the list tools handler function
         list_tools_handler = None
@@ -718,10 +745,14 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     async def call_tool(request: ToolCallRequest, http_request: Request):
         """Call an MCP tool."""
         try:
-            # Get user-specific server instance
+            # Get user-specific server instance safely
             headers = dict(http_request.headers)
             logger.info(f"Call tool endpoint - Headers: {headers}")
-            server = get_server(headers=headers)
+            
+            server, error_msg = get_server_safe(headers=headers)
+            if error_msg:
+                logger.warning(f"Call tool endpoint - Access denied: {error_msg}")
+                raise HTTPException(status_code=401, detail=error_msg)
 
             # Get the call tool handler function
             call_tool_handler = None
@@ -734,6 +765,8 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
                 return {"results": [result.model_dump() for result in results]}
             else:
                 raise HTTPException(status_code=404, detail="No tool handler found")
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -743,7 +776,11 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
         """Server-Sent Events for real-time feed updates."""
         headers = dict(request.headers)
         logger.info(f"SSE feed updates endpoint - Headers: {headers}")
-        user_id = get_user_id(headers)
+        
+        user_id, error_msg = get_user_id_safe(headers)
+        if error_msg:
+            logger.warning(f"SSE feed updates endpoint - Access denied: {error_msg}")
+            raise HTTPException(status_code=401, detail=error_msg)
 
         async def event_generator():
             """Generate SSE events for feed updates."""
@@ -755,7 +792,7 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
                 }
 
                 # Get user-specific server instance
-                server = get_server(headers=headers)
+                server = get_server(user_id=user_id, headers=headers)
 
                 # Simulate feed update monitoring
                 # In a real implementation, this would listen to feed changes
@@ -784,7 +821,11 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
         """Server-Sent Events for tool call notifications."""
         headers = dict(request.headers)
         logger.info(f"SSE tool calls endpoint - Headers: {headers}")
-        user_id = get_user_id(headers)
+        
+        user_id, error_msg = get_user_id_safe(headers)
+        if error_msg:
+            logger.warning(f"SSE tool calls endpoint - Access denied: {error_msg}")
+            raise HTTPException(status_code=401, detail=error_msg)
 
         async def event_generator():
             """Generate SSE events for tool calls."""

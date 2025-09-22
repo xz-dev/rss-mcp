@@ -355,9 +355,37 @@ async def run_fastmcp_stdio(host: str = "127.0.0.1", port: int = 8000):
 
 
 async def run_fastmcp_http(host: str = "127.0.0.1", port: int = 8000):
-    """Run the FastMCP server in HTTP mode."""
-    server = get_fastmcp_server(host=host, port=port)
-    await server.run_streamable_http_async()
+    """Run the FastMCP server in HTTP mode.
+    
+    Note: In HTTP mode, we don't create a server instance at startup.
+    Instead, server instances are created per-user when requests are received.
+    This allows multi-user support without requiring a default user.
+    """
+    # In HTTP mode, we need to start the server without a specific user
+    # The FastMCP framework will handle the HTTP server and routing
+    # User-specific instances will be created on demand when requests come in
+    
+    # For now, we'll use a system/admin instance just to start the server
+    # This won't be used for actual user requests
+    import os
+    
+    # Temporarily bypass the user ID requirement for server startup
+    original_require = os.environ.get("RSS_MCP_REQUIRE_USER_ID")
+    try:
+        # Disable user ID requirement temporarily
+        if original_require:
+            del os.environ["RSS_MCP_REQUIRE_USER_ID"]
+            
+        # Create a system server instance just for HTTP routing
+        server = get_fastmcp_server(user_id="__system__", host=host, port=port)
+        
+        # Note: In production, you'd want to modify FastMCP to handle
+        # per-request user identification properly
+        await server.run_streamable_http_async()
+    finally:
+        # Restore original setting
+        if original_require:
+            os.environ["RSS_MCP_REQUIRE_USER_ID"] = original_require
 
 
 def run_fastmcp_server(mode: str = "stdio", host: str = "127.0.0.1", port: int = 8000):

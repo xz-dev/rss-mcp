@@ -55,6 +55,41 @@ def get_user_id(headers: Optional[Dict[str, str]] = None) -> str:
     return "default"
 
 
+def get_user_id_safe(headers: Optional[Dict[str, str]] = None) -> tuple[Optional[str], Optional[str]]:
+    """Safely get user ID from headers or environment variable without raising exceptions.
+    
+    This function is designed for HTTP endpoints in multi-user systems where we don't want
+    a single user's missing ID to crash the entire server. Unlike get_user_id(), this function
+    will return an error instead of falling back to "default" when no valid user ID is found.
+
+    Args:
+        headers: Optional HTTP headers dictionary to check for X-User-ID (case insensitive)
+
+    Returns:
+        Tuple of (user_id, error_message). If error_message is not None, the request should
+        return an HTTP error instead of proceeding. user_id will be None when there's an error.
+    """
+    # Check HTTP headers first (for HTTP/SSE mode)
+    if headers:
+        lower_headers = {k.lower(): v for k, v in headers.items()}
+        if "x-user-id" in lower_headers:
+            user_id = lower_headers["x-user-id"].strip()
+            if user_id:
+                return user_id, None
+
+    # Check environment variable (for stdio mode)
+    user_id = os.getenv("RSS_MCP_USER", "").strip()
+    if user_id:
+        return user_id, None
+
+    # For HTTP endpoints, we require a user ID - don't allow default fallback
+    # This prevents unauthorized access when X-User-ID header is missing
+    return None, (
+        "User ID is required. "
+        "Provide X-User-ID header in your request."
+    )
+
+
 @dataclass
 class RSSConfig:
     """RSS MCP server configuration."""
