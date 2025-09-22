@@ -348,6 +348,21 @@ class FeedFetcher:
 
         return new_count
 
+    async def fetch_feed(self, feed_name: str) -> int:
+        """Fetch a single feed and return new entry count.
+
+        Returns:
+            Number of new entries fetched.
+        """
+        success, message = await self.refresh_feed(feed_name)
+        if success:
+            # Extract new count from message (format: "Feed 'name': X new entries (total: Y)")
+            import re
+            match = re.search(r"(\d+) new entries", message)
+            if match:
+                return int(match.group(1))
+        return 0
+
     async def refresh_feed(self, feed_name: str) -> Tuple[bool, str]:
         """Refresh a single feed.
 

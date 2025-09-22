@@ -33,6 +33,11 @@ class RSSSource:
         """Check if the source is considered healthy."""
         # Consider unhealthy if more than 5 consecutive errors
         return self.error_count < 5
+    
+    @property
+    def enabled(self) -> bool:
+        """Alias for active property."""
+        return self.active
 
 
 @dataclass
@@ -72,6 +77,11 @@ class RSSFeed:
         """Get all healthy, active sources ordered by priority."""
         active_sources = [s for s in self.sources if s.active and s.is_healthy]
         return sorted(active_sources, key=lambda s: s.priority)
+    
+    @property
+    def enabled(self) -> bool:
+        """Alias for active property."""
+        return self.active
 
 
 @dataclass

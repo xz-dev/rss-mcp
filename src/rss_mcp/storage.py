@@ -176,6 +176,10 @@ class RSSStorage:
 
         return sorted(feeds, key=lambda f: f.name)
 
+    def get_feeds(self, active_only: bool = False) -> List[RSSFeed]:
+        """Get all feeds (alias for list_feeds)."""
+        return self.list_feeds(active_only=active_only)
+
     # Source operations
     def create_source(self, source: RSSSource) -> bool:
         """Create a new source."""
@@ -418,12 +422,20 @@ class RSSStorage:
         page_size: int = 50,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> List[RSSEntry]:
         """Get entries with optional filtering and pagination."""
         # Handle legacy limit/offset style parameters
         if limit is not None:
             page_size = limit
             page = (offset // limit + 1) if offset else 1
+        
+        # Handle since/until parameters (alias for start_time/end_time)
+        if since is not None:
+            start_time = since
+        if until is not None:
+            end_time = until
 
         entries = []
 
