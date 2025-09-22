@@ -627,6 +627,7 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     async def mcp_endpoint(request: Request):
         """Main MCP protocol endpoint."""
         headers = dict(request.headers)
+        logger.info(f"MCP endpoint request - Headers: {headers}")
         server = get_server(headers=headers)
 
         try:
@@ -684,6 +685,7 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     async def user_info(request: Request):
         """Get current user information."""
         headers = dict(request.headers)
+        logger.info(f"User info endpoint - Headers: {headers}")
         user_id = get_user_id(headers)
         
         # Check for X-User-ID header in a case-insensitive way
@@ -697,6 +699,7 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
         """List available MCP tools."""
         # Get user-specific server instance
         headers = dict(request.headers)
+        logger.info(f"List tools endpoint - Headers: {headers}")
         server = get_server(headers=headers)
 
         # Get the list tools handler function
@@ -717,6 +720,7 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
         try:
             # Get user-specific server instance
             headers = dict(http_request.headers)
+            logger.info(f"Call tool endpoint - Headers: {headers}")
             server = get_server(headers=headers)
 
             # Get the call tool handler function
@@ -738,6 +742,7 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     async def sse_feed_updates(request: Request):
         """Server-Sent Events for real-time feed updates."""
         headers = dict(request.headers)
+        logger.info(f"SSE feed updates endpoint - Headers: {headers}")
         user_id = get_user_id(headers)
 
         async def event_generator():
@@ -778,6 +783,7 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
     async def sse_tool_calls(request: Request):
         """Server-Sent Events for tool call notifications."""
         headers = dict(request.headers)
+        logger.info(f"SSE tool calls endpoint - Headers: {headers}")
         user_id = get_user_id(headers)
 
         async def event_generator():
