@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 @dataclass
 class RSSSource:
     """Represents a single RSS source URL."""
-    
+
     id: Optional[str] = None
     feed_name: str = ""
     url: str = ""
@@ -20,7 +20,7 @@ class RSSSource:
     error_count: int = 0
     last_error: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
-    
+
     def __post_init__(self):
         """Validate the source URL."""
         if self.url:
@@ -38,7 +38,7 @@ class RSSSource:
 @dataclass
 class RSSFeed:
     """Represents an RSS feed with multiple sources."""
-    
+
     name: str = ""
     title: str = ""
     description: str = ""
@@ -51,14 +51,14 @@ class RSSFeed:
     entry_count: int = 0
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
-    
+
     def __post_init__(self):
         """Validate the feed."""
         if not self.name:
             raise ValueError("Feed name cannot be empty")
         if not self.title:
             self.title = self.name
-    
+
     @property
     def primary_source(self) -> Optional[RSSSource]:
         """Get the primary (highest priority) active source."""
@@ -66,7 +66,7 @@ class RSSFeed:
         if not active_sources:
             return None
         return min(active_sources, key=lambda s: s.priority)
-    
+
     @property
     def healthy_sources(self) -> List[RSSSource]:
         """Get all healthy, active sources ordered by priority."""
@@ -77,7 +77,7 @@ class RSSFeed:
 @dataclass
 class RSSEntry:
     """Represents an RSS entry/article."""
-    
+
     id: Optional[str] = None
     feed_name: str = ""
     source_url: str = ""
@@ -92,47 +92,47 @@ class RSSEntry:
     tags: List[str] = field(default_factory=list)
     enclosures: List[str] = field(default_factory=list)  # Media attachments
     created_at: datetime = field(default_factory=datetime.now)
-    
+
     def __post_init__(self):
         """Validate the entry."""
         if not self.feed_name:
             raise ValueError("Entry must belong to a feed")
         if not self.guid and not self.link:
             raise ValueError("Entry must have either GUID or link")
-        
+
         # Use link as GUID if GUID is not provided
         if not self.guid:
             self.guid = self.link
-    
+
     @property
     def effective_published(self) -> datetime:
         """Get the effective publication date (published or created_at)."""
         return self.published or self.created_at
-    
+
     @property
     def summary(self) -> str:
         """Get a summary of the entry (content or description)."""
         return self.content or self.description
-    
+
     def get_truncated_summary(self, max_length: int = 200) -> str:
         """Get a truncated summary of the entry."""
         summary = self.summary
         if len(summary) <= max_length:
             return summary
-        
+
         # Find a good breaking point
         truncated = summary[:max_length]
-        last_space = truncated.rfind(' ')
+        last_space = truncated.rfind(" ")
         if last_space > max_length * 0.8:  # If we can break at a word boundary
             truncated = truncated[:last_space]
-        
+
         return truncated + "..."
 
 
-@dataclass 
+@dataclass
 class FeedStats:
     """Statistics for a feed."""
-    
+
     feed_name: str = ""
     total_entries: int = 0
     entries_last_24h: int = 0

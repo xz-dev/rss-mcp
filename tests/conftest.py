@@ -5,15 +5,14 @@ import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Generator
-
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from rss_mcp.config import ConfigManager, RSSConfig
-from rss_mcp.storage import RSSStorage
-from rss_mcp.models import RSSFeed, RSSSource, RSSEntry
 from rss_mcp.feed_manager import FeedFetcher
+from rss_mcp.models import RSSEntry, RSSFeed, RSSSource
+from rss_mcp.storage import RSSStorage
 
 
 @pytest.fixture(scope="session")
@@ -31,12 +30,15 @@ def temp_dir():
         tmpdir_path = Path(tmpdir)
         config_path = tmpdir_path / "config.json"
         cache_path = tmpdir_path / "cache"
-        
+
         # Set environment variables to use temporary directories
-        with patch.dict('os.environ', {
-            'RSS_MCP_CONFIG_DIR': str(tmpdir_path / "config"),
-            'RSS_MCP_CACHE_DIR': str(cache_path)
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "RSS_MCP_CONFIG_DIR": str(tmpdir_path / "config"),
+                "RSS_MCP_CACHE_DIR": str(cache_path),
+            },
+        ):
             yield tmpdir_path
 
 
@@ -80,19 +82,19 @@ def sample_feed():
         description="A test RSS feed",
         link="https://example.com",
     )
-    
+
     source1 = RSSSource(
         feed_name="test-feed",
         url="https://example.com/rss.xml",
         priority=0,
     )
-    
+
     source2 = RSSSource(
-        feed_name="test-feed", 
+        feed_name="test-feed",
         url="https://example.com/backup.xml",
         priority=1,
     )
-    
+
     feed.sources = [source1, source2]
     return feed
 
@@ -101,7 +103,7 @@ def sample_feed():
 def sample_entries():
     """Create sample RSS entries."""
     entries = []
-    
+
     for i in range(5):
         entry = RSSEntry(
             feed_name="test-feed",
@@ -112,11 +114,11 @@ def sample_entries():
             description=f"Description for entry {i}",
             content=f"Full content for entry {i}",
             author="Test Author",
-            published=datetime(2023, 1, i+1, 12, 0, 0),
+            published=datetime(2023, 1, i + 1, 12, 0, 0),
             tags=["test", f"tag{i}"],
         )
         entries.append(entry)
-    
+
     return entries
 
 
@@ -171,21 +173,21 @@ async def async_feed_fetcher(test_config, storage):
 def mock_aiohttp_session():
     """Mock aiohttp session for testing."""
     session = MagicMock()
-    
+
     class MockResponse:
         def __init__(self, status=200, text=""):
             self.status = status
             self._text = text
-        
+
         async def text(self):
             return self._text
-        
+
         async def __aenter__(self):
             return self
-        
+
         async def __aexit__(self, *args):
             pass
-    
+
     session.get.return_value = MockResponse()
     return session
 
@@ -194,19 +196,20 @@ def mock_aiohttp_session():
 def cleanup_verification():
     """Verify that test environments are properly cleaned up."""
     initial_cwd = os.getcwd()
-    
+
     # Record initial state
     yield
-    
+
     # Verify cleanup after test
     assert os.getcwd() == initial_cwd, "Test changed working directory and didn't restore it"
-    
+
     # Check that no RSS_MCP environment variables are leaking
     # (This is handled by our temp_dir fixture's patch.dict context manager)
-    rss_env_vars = [key for key in os.environ.keys() if key.startswith('RSS_MCP_')]
+    rss_env_vars = [key for key in os.environ.keys() if key.startswith("RSS_MCP_")]
     if rss_env_vars:
         # Only warn if they're not the ones we set in temp_dir fixture
         import warnings
+
         warnings.warn(f"RSS_MCP environment variables found after test: {rss_env_vars}")
 
 
@@ -215,9 +218,10 @@ def environment_isolation(cleanup_verification):
     """Automatically ensure environment isolation for all tests."""
     # Clear any global config manager state before each test
     import rss_mcp.config
+
     rss_mcp.config._config_manager = None
-    
+
     yield
-    
+
     # Clean up global state after each test
     rss_mcp.config._config_manager = None

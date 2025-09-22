@@ -27,5 +27,5 @@ ENV RSS_MCP_CONFIG_DIR=/app/config \
 # Expose HTTP port
 EXPOSE 8080
 
-# Run HTTP server
+# Run RSS MCP HTTP server on port 8080 (using FastMCP internally)
 CMD ["rss-mcp", "serve", "http", "--host", "0.0.0.0", "--port", "8080"]

@@ -79,22 +79,15 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short --strict-markers"
 asyncio_mode = "auto"
 markers = [
     "integration: marks tests as integration tests",
     "slow: marks tests as slow (may be skipped)",
     "network: marks tests as requiring network access",
-    "unit: marks tests as unit tests",
     "env_check: marks tests for environment validation",
 ]
-timeout = 300
 filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
+    "ignore::DeprecationWarning:feedparser.*",
 ]
 
 [tool.coverage.run]
@@ -178,6 +171,10 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "aiohttp>=3.12.15",
+    "psutil>=7.1.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
+    "pytest-mock>=3.15.1",
+    "pytest-xdist>=3.8.0",
 ]
