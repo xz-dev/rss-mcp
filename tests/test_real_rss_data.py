@@ -1,7 +1,7 @@
 """Tests using real RSS data from Caixin feed."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import feedparser
@@ -115,7 +115,7 @@ class TestRealRSSDataProcessing:
                 link=entry_data.get("link", ""),
                 description=entry_data.get("description", ""),
                 author=entry_data.get("author", ""),
-                published=datetime.now(),  # Simplified for test
+                published=datetime.now(timezone.utc),  # Simplified for test
                 tags=[entry_data.get("category", "")] if entry_data.get("category") else [],
             )
             
@@ -169,13 +169,13 @@ class TestRealDataWithMCPServer:
                 title=entry_data.get("title", ""),
                 link=entry_data.get("link", ""),
                 description=entry_data.get("description", ""),
-                published=datetime.now(),
+                published=datetime.now(timezone.utc),
             )
             storage.create_entry(rss_entry)
         
         # Test get_entries with since parameter (should work after our fix)
         from datetime import timedelta
-        since_time = datetime.now() - timedelta(hours=1)
+        since_time = datetime.now(timezone.utc) - timedelta(hours=1)
         
         entries_with_since = storage.get_entries(
             feed_name=feed_name,
@@ -247,12 +247,12 @@ class TestRealDataValidation:
         
         # Check publication times are recent (within last week for news feed)
         from datetime import timedelta
-        recent_cutoff = datetime.now() - timedelta(days=7)
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         
         recent_entries = []
         for entry in entries:
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                pub_time = datetime(*entry.published_parsed[:6])
+                pub_time = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
                 if pub_time > recent_cutoff:
                     recent_entries.append(entry)
         

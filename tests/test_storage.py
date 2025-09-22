@@ -1,6 +1,6 @@
 """Tests for RSS storage layer."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 from rss_mcp.models import RSSEntry, RSSFeed, RSSSource
@@ -294,18 +294,18 @@ class TestRSSStorage:
             storage.create_entry(entry)
 
         # Filter by start time
-        start_time = datetime(2023, 1, 3, 0, 0, 0)
+        start_time = datetime(2023, 1, 3, 0, 0, 0, tzinfo=timezone.utc)
         entries = storage.get_entries(start_time=start_time)
         assert len(entries) == 3  # Entries 2, 3, 4
 
         # Filter by end time
-        end_time = datetime(2023, 1, 3, 23, 59, 59)
+        end_time = datetime(2023, 1, 3, 23, 59, 59, tzinfo=timezone.utc)
         entries = storage.get_entries(end_time=end_time)
         assert len(entries) == 3  # Entries 0, 1, 2
 
         # Filter by both
         entries = storage.get_entries(
-            start_time=datetime(2023, 1, 2, 0, 0, 0), end_time=datetime(2023, 1, 4, 23, 59, 59)
+            start_time=datetime(2023, 1, 2, 0, 0, 0, tzinfo=timezone.utc), end_time=datetime(2023, 1, 4, 23, 59, 59, tzinfo=timezone.utc)
         )
         assert len(entries) == 3  # Entries 1, 2, 3
 
@@ -352,7 +352,7 @@ class TestRSSStorage:
         assert storage.get_entry_count(feed_name="nonexistent") == 0
 
         # Count with time filter
-        start_time = datetime(2023, 1, 3, 0, 0, 0)
+        start_time = datetime(2023, 1, 3, 0, 0, 0, tzinfo=timezone.utc)
         assert storage.get_entry_count(start_time=start_time) == 3
 
     def test_get_feed_stats(self, storage, sample_feed, sample_entries):
@@ -371,7 +371,7 @@ class TestRSSStorage:
             storage.create_source(source)
 
         # Adjust entry dates for testing
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         for i, entry in enumerate(sample_entries):
             if i < 2:  # Last 24h
                 entry.published = now - timedelta(hours=i)
@@ -394,7 +394,7 @@ class TestRSSStorage:
         storage.create_feed(sample_feed)
 
         # Create entries with different ages
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         old_entries = []
         new_entries = []
 
@@ -445,7 +445,7 @@ class TestRSSStorage:
         # Valid datetime string
         dt_str = "2023-01-01T12:00:00"
         parsed = storage._parse_datetime(dt_str)
-        assert parsed == datetime(2023, 1, 1, 12, 0, 0)
+        assert parsed == datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
         # None
         assert storage._parse_datetime(None) is None

@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -287,7 +288,7 @@ class TestMultiUserIntegration:
 
             url = "https://example.com/feed.xml"
             content = '<?xml version="1.0"?><rss><channel><title>Test</title></channel></rss>'
-            last_modified = datetime.now()
+            last_modified = datetime.now(timezone.utc)
             etag = '"abc123"'
 
             # Cache with HTTP headers

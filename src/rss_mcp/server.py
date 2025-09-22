@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -532,7 +532,7 @@ class RSSMCPServer:
                     num = int(parts[0])
                     unit = parts[1].rstrip("s")  # Remove plural 's'
 
-                    now = datetime.now()
+                    now = datetime.now(timezone.utc)
                     if unit in ("day", "days"):
                         return now - timedelta(days=num)
                     elif unit in ("hour", "hours"):
@@ -546,7 +546,11 @@ class RSSMCPServer:
 
         # Parse absolute time
         try:
-            return date_parser.parse(time_str)
+            dt = date_parser.parse(time_str)
+            # If parsed datetime is offset-naive, assume UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except Exception:
             return None
 
@@ -681,7 +685,12 @@ async def run_http_server(host: str = "localhost", port: int = 8080):
         """Get current user information."""
         headers = dict(request.headers)
         user_id = get_user_id(headers)
-        return {"user_id": user_id, "headers_provided": bool(headers.get("X-User-ID"))}
+        
+        # Check for X-User-ID header in a case-insensitive way
+        lower_headers = {k.lower(): v for k, v in headers.items()}
+        headers_provided = "x-user-id" in lower_headers and bool(lower_headers["x-user-id"].strip())
+        
+        return {"user_id": user_id, "headers_provided": headers_provided}
 
     @app.get("/mcp/tools")
     async def list_tools(request: Request):

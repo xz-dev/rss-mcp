@@ -104,7 +104,7 @@ class RSSStorage:
         if not feed_file.exists():
             return False
 
-        feed.updated_at = datetime.now()
+        feed.updated_at = datetime.now(timezone.utc)
 
         feed_data = {
             "name": feed.name,
@@ -593,7 +593,7 @@ class RSSStorage:
 
     def cleanup_old_entries(self, days: int = 90) -> int:
         """Remove entries older than specified days."""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         deleted_count = 0
 
         for feed_dir in self.entries_dir.iterdir():
@@ -670,7 +670,7 @@ class RSSStorage:
             cache_data = {
                 "url": url,
                 "content": content,
-                "cached_at": datetime.now().isoformat(),
+                "cached_at": datetime.now(timezone.utc).isoformat(),
                 "last_modified": last_modified.isoformat() if last_modified else None,
                 "etag": etag,
             }
@@ -707,7 +707,7 @@ class RSSStorage:
             # Check cache age
             cached_at = self._parse_datetime(cache_data.get("cached_at"))
             if cached_at:
-                age_hours = (datetime.now() - cached_at).total_seconds() / 3600
+                age_hours = (datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
                 if age_hours > max_age_hours:
                     return None
 
