@@ -22,6 +22,9 @@ def get_user_id(headers: Optional[Dict[str, str]] = None) -> str:
 
     Returns:
         User ID string, defaults to "default" if not found
+        
+    Raises:
+        ValueError: If RSS_MCP_REQUIRE_USER_ID is set and no user ID is provided
     """
     # Check HTTP headers first (for HTTP/SSE mode)
     # Headers are case-insensitive, so normalize to lowercase for lookup
@@ -38,6 +41,15 @@ def get_user_id(headers: Optional[Dict[str, str]] = None) -> str:
     user_id = os.getenv("RSS_MCP_USER", "").strip()
     if user_id:
         return user_id
+
+    # Check if default user is disabled
+    require_user_id = os.getenv("RSS_MCP_REQUIRE_USER_ID", "").lower() in ("1", "true", "yes", "on")
+    if require_user_id:
+        raise ValueError(
+            "User ID is required but not provided. "
+            "Set RSS_MCP_USER environment variable or provide X-User-ID header. "
+            "To disable this requirement, unset RSS_MCP_REQUIRE_USER_ID."
+        )
 
     # Default fallback
     return "default"
