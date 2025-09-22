@@ -418,11 +418,11 @@ def serve():
 
 @serve.command("stdio")
 def serve_stdio():
-    """Start MCP server in stdio mode with multi-user support."""
-    from .fastmcp_multiuser_v2 import run_multiuser_fastmcp_stdio
+    """Start MCP server in stdio mode with FastMCP multi-user support."""
+    from .fastmcp_multiuser_v2 import run_fastmcp_stdio
 
     try:
-        asyncio.run(run_multiuser_fastmcp_stdio())
+        asyncio.run(run_fastmcp_stdio())
     except KeyboardInterrupt:
         click.echo("\nServer stopped")
     except Exception as e:
@@ -433,32 +433,94 @@ def serve_stdio():
 @serve.command("http")
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", type=int, default=8080, help="Port to bind to")
-@click.option("--mode", type=click.Choice(["fastmcp", "standard"]), default="standard", 
-              help="HTTP server mode (fastmcp uses StreamableHTTP, standard uses JSON-RPC)")
-def serve_http(host, port, mode):
-    """Start MCP server in HTTP mode with multi-user support."""
-    if mode == "fastmcp":
-        from .fastmcp_multiuser_v2 import run_multiuser_fastmcp_server
-        
+def serve_http(host, port):
+    """Start MCP server in HTTP mode with FastMCP multi-user support."""
+    from .fastmcp_multiuser_v2 import run_fastmcp_http
+    
+    try:
+        click.echo(f"Starting FastMCP RSS server in HTTP mode on {host}:{port}")
+        click.echo(f"MCP endpoint will be available at http://{host}:{port}/mcp")
+        click.echo("Send X-User-ID header to identify different users")
+        asyncio.run(run_fastmcp_http(host, port))
+    except KeyboardInterrupt:
+        click.echo("\nServer stopped")
+    except Exception as e:
+        click.echo(f"Server error: {e}", err=True)
+        sys.exit(1)
+
+
+@serve.command("test-client")
+@click.option("--host", default="127.0.0.1", help="Server host to connect to")
+@click.option("--port", type=int, default=8080, help="Server port to connect to")
+@click.option("--user-id", default="cli_test_user", help="User ID to use in headers")
+def test_client(host, port, user_id):
+    """Test FastMCP client functionality with headers."""
+    async def run_test():
         try:
-            click.echo(f"Starting RSS MCP server in FastMCP StreamableHTTP mode on {host}:{port}")
-            asyncio.run(run_multiuser_fastmcp_server(host, port))
-        except KeyboardInterrupt:
-            click.echo("\nServer stopped")
+            from fastmcp.client import Client, StreamableHttpTransport
+            
+            # Create custom transport with headers
+            class HeadersAwareHttpTransport(StreamableHttpTransport):
+                def __init__(self, base_url: str, user_id: str):
+                    super().__init__(base_url)
+                    self.user_id = user_id
+                
+                def _get_headers(self):
+                    headers = super()._get_headers() if hasattr(super(), '_get_headers') else {}
+                    headers["X-User-ID"] = self.user_id
+                    return headers
+            
+            base_url = f"http://{host}:{port}/mcp"
+            transport = HeadersAwareHttpTransport(base_url, user_id)
+            client = Client(transport=transport)
+            
+            click.echo(f"Testing FastMCP client connection to {base_url}")
+            click.echo(f"Using User ID: {user_id}")
+            
+            async with client:
+                # Test ping
+                await client.ping()
+                click.echo("✓ Ping successful")
+                
+                # List tools
+                tools = await client.list_tools()
+                click.echo(f"✓ Found {len(tools)} tools:")
+                for tool in tools[:5]:  # Show first 5
+                    click.echo(f"  - {tool.name}: {tool.description}")
+                
+                # Test basic operations
+                feeds_result = await client.call_tool("list_feeds", {})
+                click.echo(f"✓ Listed feeds for user {feeds_result['user_id']}")
+                click.echo(f"  Current feeds: {len(feeds_result['feeds'])}")
+                
+                # Add a test feed
+                add_result = await client.call_tool("add_feed", {
+                    "name": "cli_test_feed",
+                    "title": "CLI Test Feed",
+                    "description": "Test feed created by CLI client"
+                })
+                if add_result["success"]:
+                    click.echo(f"✓ Created test feed: {add_result['feed_name']}")
+                else:
+                    click.echo(f"⚠ Feed creation failed or already exists: {add_result.get('error', 'unknown error')}")
+                
+                # Get stats
+                stats_result = await client.call_tool("get_feed_stats", {})
+                click.echo(f"✓ Overall stats: {stats_result['total_feeds']} feeds, {stats_result['total_entries']} entries")
+                
+                click.echo(f"\n🎉 FastMCP client test completed successfully for user: {user_id}")
+                
         except Exception as e:
-            click.echo(f"Server error: {e}", err=True)
+            click.echo(f"❌ Client test failed: {e}", err=True)
             sys.exit(1)
-    else:
-        from .server import run_http_server
-        
-        try:
-            click.echo(f"Starting RSS MCP server in standard HTTP mode on {host}:{port}")
-            asyncio.run(run_http_server(host, port))
-        except KeyboardInterrupt:
-            click.echo("\nServer stopped")
-        except Exception as e:
-            click.echo(f"Server error: {e}", err=True)
-            sys.exit(1)
+    
+    try:
+        asyncio.run(run_test())
+    except KeyboardInterrupt:
+        click.echo("\nTest interrupted")
+    except Exception as e:
+        click.echo(f"Test error: {e}", err=True)
+        sys.exit(1)
 
 
 @cli.command()
