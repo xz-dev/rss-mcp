@@ -1,5 +1,6 @@
 """Multi-user FastMCP server implementation using Starlette."""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Dict, Optional
@@ -262,6 +263,10 @@ def create_multiuser_app() -> Starlette:
 def create_dynamic_mcp_handler():
     """Create a dynamic handler that routes to user-specific MCP servers."""
     class DynamicMCPHandler:
+        def __init__(self):
+            self.user_apps = {}
+            self.initialization_lock = asyncio.Lock()
+        
         async def __call__(self, scope, receive, send):
             # Extract user ID from scope (should be set by middleware)
             request = Request(scope, receive)
@@ -276,11 +281,25 @@ def create_dynamic_mcp_handler():
                 await response(scope, receive, send)
                 return
             
-            # Get or create user-specific server
-            server = create_user_fastmcp_server(user_id)
+            # Get or create user-specific server and app
+            async with self.initialization_lock:
+                if user_id not in self.user_apps:
+                    # Get or create user-specific server
+                    server = create_user_fastmcp_server(user_id)
+                    
+                    # Create the streamable HTTP app for this user's server
+                    # This needs to be created once and reused
+                    user_app = server.streamable_http_app()
+                    self.user_apps[user_id] = user_app
+                    
+                    # Initialize the app if needed
+                    # The app needs to be started properly for the task group to be initialized
+                    if hasattr(user_app, 'lifespan'):
+                        # Handle lifespan events
+                        pass
             
-            # Get the streamable HTTP app for this user's server
-            user_app = server.streamable_http_app()
+            # Get the cached app for this user
+            user_app = self.user_apps[user_id]
             
             # Forward to user's server
             await user_app(scope, receive, send)

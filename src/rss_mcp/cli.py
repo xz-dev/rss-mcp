@@ -419,7 +419,7 @@ def serve():
 @serve.command("stdio")
 def serve_stdio():
     """Start MCP server in stdio mode with multi-user support."""
-    from .fastmcp_multiuser import run_multiuser_fastmcp_stdio
+    from .fastmcp_multiuser_v2 import run_multiuser_fastmcp_stdio
 
     try:
         asyncio.run(run_multiuser_fastmcp_stdio())
@@ -433,18 +433,32 @@ def serve_stdio():
 @serve.command("http")
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", type=int, default=8080, help="Port to bind to")
-def serve_http(host, port):
+@click.option("--mode", type=click.Choice(["fastmcp", "standard"]), default="standard", 
+              help="HTTP server mode (fastmcp uses StreamableHTTP, standard uses JSON-RPC)")
+def serve_http(host, port, mode):
     """Start MCP server in HTTP mode with multi-user support."""
-    from .fastmcp_multiuser import run_multiuser_fastmcp_server
-    
-    try:
-        click.echo(f"Starting RSS MCP server in HTTP mode on {host}:{port}")
-        asyncio.run(run_multiuser_fastmcp_server(host, port))
-    except KeyboardInterrupt:
-        click.echo("\nServer stopped")
-    except Exception as e:
-        click.echo(f"Server error: {e}", err=True)
-        sys.exit(1)
+    if mode == "fastmcp":
+        from .fastmcp_multiuser_v2 import run_multiuser_fastmcp_server
+        
+        try:
+            click.echo(f"Starting RSS MCP server in FastMCP StreamableHTTP mode on {host}:{port}")
+            asyncio.run(run_multiuser_fastmcp_server(host, port))
+        except KeyboardInterrupt:
+            click.echo("\nServer stopped")
+        except Exception as e:
+            click.echo(f"Server error: {e}", err=True)
+            sys.exit(1)
+    else:
+        from .server import run_http_server
+        
+        try:
+            click.echo(f"Starting RSS MCP server in standard HTTP mode on {host}:{port}")
+            asyncio.run(run_http_server(host, port))
+        except KeyboardInterrupt:
+            click.echo("\nServer stopped")
+        except Exception as e:
+            click.echo(f"Server error: {e}", err=True)
+            sys.exit(1)
 
 
 @cli.command()
