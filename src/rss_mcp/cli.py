@@ -3,21 +3,24 @@
 import asyncio
 import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import click
 from dateutil import parser as date_parser
 
-from .config import get_config_manager
-from .feed_manager import FeedFetcher
-from .models import RSSFeed, RSSSource
-from .storage import RSSStorage
+from .cache_storage import CacheStorage
+from .config import RSSFeedConfig, UserConfigManager, config, get_user_id
+from .feed_manager import FeedManager
+from .user_rss_manager import UserRssManager
 
 
-def get_storage() -> RSSStorage:
-    """Get storage instance using config."""
-    config = get_config_manager().config
-    return RSSStorage(Path(config.cache_path))
+def get_user_resources() -> tuple[UserRssManager, FeedManager, CacheStorage]:
+    """Get user-specific resources for CLI operations."""
+    user_id = get_user_id()
+    user_config_manager = UserConfigManager(config, user_id)
+    user_manager = UserRssManager(user_config_manager)
+    cache_storage = CacheStorage(config.cache_path, user_id)
+    feed_manager = FeedManager(user_manager, cache_storage, config)
+    return user_manager, feed_manager, cache_storage
 
 
 @click.group()
@@ -35,44 +38,30 @@ def feed():
 @click.argument("url")
 @click.option("--title", help="Feed title")
 @click.option("--description", help="Feed description")
-@click.option("--interval", type=int, help="Fetch interval in seconds")
-@click.option("--priority", type=int, default=0, help="Source priority (lower = higher priority)")
-def add_feed(name, url, title, description, interval, priority):
+@click.option("--interval", type=int, default=3600, help="Fetch interval in seconds")
+def add_feed(name, url, title, description, interval):
     """Add a new RSS feed with source URL."""
     try:
-        storage = get_storage()
-        config = get_config_manager().config
+        user_manager, _, _ = get_user_resources()
 
         # Check if feed already exists
-        existing = storage.get_feed(name)
-        if existing:
+        existing_feeds = user_manager.get_feeds()
+        if any(feed.name == name for feed in existing_feeds):
             click.echo(f"Error: Feed '{name}' already exists", err=True)
             sys.exit(1)
 
-        # Create feed
-        feed = RSSFeed(
+        # Create feed config
+        feed_config = RSSFeedConfig(
             name=name,
             title=title or name,
             description=description or "",
-            fetch_interval=interval or config.default_fetch_interval,
+            sources=[url],
+            fetch_interval=interval,
         )
 
-        # Create source
-        source = RSSSource(
-            feed_name=name,
-            url=url,
-            priority=priority,
-        )
-        feed.sources.append(source)
-
-        # Save to database
-        if storage.create_feed(feed):
-            # Also save the source
-            if storage.create_source(source):
-                click.echo(f"✓ Added feed '{name}' with source {url}")
-            else:
-                click.echo(f"Error: Failed to create source for feed '{name}'", err=True)
-                sys.exit(1)
+        # Add to configuration
+        if user_manager.add_feed(feed_config):
+            click.echo(f"✓ Added feed '{name}' with source {url}")
         else:
             click.echo(f"Error: Failed to create feed '{name}'", err=True)
             sys.exit(1)
@@ -83,42 +72,33 @@ def add_feed(name, url, title, description, interval, priority):
 
 
 @feed.command("list")
-@click.option("--active-only", is_flag=True, help="Show only active feeds")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed information")
-def list_feeds(active_only, verbose):
+def list_feeds(verbose):
     """List all RSS feeds."""
     try:
-        storage = get_storage()
-        feeds = storage.list_feeds(active_only=active_only)
+        user_manager, _, cache_storage = get_user_resources()
+        feeds = user_manager.get_feeds()
 
         if not feeds:
             click.echo("No feeds found")
             return
 
         for feed in feeds:
-            status = "🟢" if feed.active else "🔴"
+            status = "🟢" if feed.sources else "🔴"  # Green if has sources, red if empty
+            entry_count = cache_storage.get_entry_count(feed.name)
 
             if verbose:
-                click.echo(f"\n{status} {feed.name}")
+                click.echo(f"{status} {feed.name}")
                 click.echo(f"  Title: {feed.title}")
-                if feed.description:
-                    click.echo(f"  Description: {feed.description}")
+                click.echo(f"  Description: {feed.description}")
                 click.echo(f"  Sources: {len(feed.sources)}")
-                click.echo(f"  Entries: {feed.entry_count}")
-                click.echo(f"  Interval: {feed.fetch_interval}s")
-                if feed.last_success:
-                    click.echo(f"  Last Success: {feed.last_success}")
-
                 for i, source in enumerate(feed.sources):
-                    src_status = "🟢" if source.active and source.is_healthy else "🔴"
-                    click.echo(f"    {src_status} [{source.priority}] {source.url}")
-                    if source.error_count > 0:
-                        click.echo(
-                            f"        Errors: {source.error_count}, Last: {source.last_error}"
-                        )
+                    click.echo(f"    {i+1}. {source}")
+                click.echo(f"  Entries: {entry_count}")
+                click.echo(f"  Fetch Interval: {feed.fetch_interval}s")
+                click.echo()
             else:
-                sources_info = f"{len(feed.sources)} source(s)"
-                click.echo(f"{status} {feed.name:20} {feed.entry_count:5} entries {sources_info}")
+                click.echo(f"{status} {feed.name} ({entry_count} entries)")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -127,14 +107,18 @@ def list_feeds(active_only, verbose):
 
 @feed.command("remove")
 @click.argument("name")
-@click.confirmation_option(prompt="Are you sure you want to delete this feed?")
-def remove_feed(name):
-    """Remove an RSS feed and all its data."""
+@click.option("--keep-entries", is_flag=True, help="Keep cached entries")
+def remove_feed(name, keep_entries):
+    """Remove an RSS feed."""
     try:
-        storage = get_storage()
+        user_manager, _, cache_storage = get_user_resources()
 
-        if storage.delete_feed(name):
-            click.echo(f"✓ Removed feed '{name}'")
+        if user_manager.remove_feed(name):
+            if not keep_entries:
+                entries_removed = cache_storage.delete_feed_entries(name)
+                click.echo(f"✓ Removed feed '{name}' and {entries_removed} entries")
+            else:
+                click.echo(f"✓ Removed feed '{name}' (entries preserved)")
         else:
             click.echo(f"Error: Feed '{name}' not found", err=True)
             sys.exit(1)
@@ -144,46 +128,140 @@ def remove_feed(name):
         sys.exit(1)
 
 
-@feed.command("enable")
-@click.argument("name")
-def enable_feed(name):
-    """Enable a feed."""
+@feed.command("refresh")
+@click.argument("name", required=False)
+@click.option("--all", "refresh_all", is_flag=True, help="Refresh all feeds")
+def refresh_feeds(name, refresh_all):
+    """Refresh RSS feeds."""
     try:
-        storage = get_storage()
-        feed = storage.get_feed(name)
+        user_manager, feed_manager, _ = get_user_resources()
 
-        if not feed:
-            click.echo(f"Error: Feed '{name}' not found", err=True)
-            sys.exit(1)
+        async def do_refresh():
+            if refresh_all or name is None:
+                # Refresh all feeds
+                feeds = user_manager.get_feeds()
+                feed_names = [feed.name for feed in feeds]
+                if not feed_names:
+                    click.echo("No feeds to refresh")
+                    return
 
-        feed.active = True
-        if storage.update_feed(feed):
-            click.echo(f"✓ Enabled feed '{name}'")
-        else:
-            click.echo(f"Error: Failed to enable feed '{name}'", err=True)
+                click.echo(f"Refreshing {len(feed_names)} feeds...")
+                results = await feed_manager.refresh_all_feeds(feed_names)
+
+                success_count = 0
+                total_entries = 0
+
+                for feed_name, success, message in results:
+                    if success:
+                        success_count += 1
+                        # Extract entry count from message
+                        import re
+
+                        match = re.search(r"(\d+) new entries", message)
+                        if match:
+                            new_count = int(match.group(1))
+                            total_entries += new_count
+                            click.echo(f"✓ {feed_name}: {new_count} new entries")
+                        else:
+                            click.echo(f"✓ {feed_name}: refreshed")
+                    else:
+                        click.echo(f"✗ {feed_name}: {message}")
+
+                click.echo(
+                    f"\nRefreshed {success_count}/{len(feed_names)} feeds, {total_entries} new entries total"
+                )
+
+            else:
+                # Refresh specific feed
+                feeds = user_manager.get_feeds()
+                if not any(feed.name == name for feed in feeds):
+                    click.echo(f"Error: Feed '{name}' not found", err=True)
+                    sys.exit(1)
+
+                click.echo(f"Refreshing feed '{name}'...")
+                success, message = await feed_manager.refresh_feed(name)
+
+                if success:
+                    click.echo(f"✓ {message}")
+                else:
+                    click.echo(f"✗ {message}")
+
+        # Run async refresh
+        asyncio.run(do_refresh())
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-@feed.command("disable")
-@click.argument("name")
-def disable_feed(name):
-    """Disable a feed."""
+@feed.command("add-source")
+@click.argument("feed_name")
+@click.argument("url")
+def add_source(feed_name, url):
+    """Add a source URL to an existing feed."""
     try:
-        storage = get_storage()
-        feed = storage.get_feed(name)
+        user_manager, _, _ = get_user_resources()
 
-        if not feed:
-            click.echo(f"Error: Feed '{name}' not found", err=True)
+        # Get current feeds
+        feeds = user_manager.get_feeds()
+        target_feed = None
+        for feed in feeds:
+            if feed.name == feed_name:
+                target_feed = feed
+                break
+
+        if not target_feed:
+            click.echo(f"Error: Feed '{feed_name}' not found", err=True)
             sys.exit(1)
 
-        feed.active = False
-        if storage.update_feed(feed):
-            click.echo(f"✓ Disabled feed '{name}'")
+        # Add source URL if not already present
+        if url not in target_feed.sources:
+            target_feed.sources.append(url)
+            if user_manager.update_feed(feed_name, target_feed):
+                click.echo(f"✓ Added source {url} to feed '{feed_name}'")
+            else:
+                click.echo(f"Error: Failed to update feed '{feed_name}'", err=True)
+                sys.exit(1)
         else:
-            click.echo(f"Error: Failed to disable feed '{name}'", err=True)
+            click.echo(f"Error: Source {url} already exists in feed '{feed_name}'", err=True)
+            sys.exit(1)
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@feed.command("remove-source")
+@click.argument("feed_name")
+@click.argument("url")
+def remove_source(feed_name, url):
+    """Remove a source URL from a feed."""
+    try:
+        user_manager, _, _ = get_user_resources()
+
+        # Get current feeds
+        feeds = user_manager.get_feeds()
+        target_feed = None
+        for feed in feeds:
+            if feed.name == feed_name:
+                target_feed = feed
+                break
+
+        if not target_feed:
+            click.echo(f"Error: Feed '{feed_name}' not found", err=True)
+            sys.exit(1)
+
+        # Remove source URL if present
+        if url in target_feed.sources:
+            target_feed.sources.remove(url)
+            if user_manager.update_feed(feed_name, target_feed):
+                click.echo(f"✓ Removed source {url} from feed '{feed_name}'")
+            else:
+                click.echo(f"Error: Failed to update feed '{feed_name}'", err=True)
+                sys.exit(1)
+        else:
+            click.echo(f"Error: Source {url} not found in feed '{feed_name}'", err=True)
+            sys.exit(1)
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -191,135 +269,31 @@ def disable_feed(name):
 
 
 @cli.group()
-def source():
-    """Manage RSS sources."""
+def entries():
+    """Manage RSS entries."""
 
 
-@source.command("add")
-@click.argument("feed_name")
-@click.argument("url")
-@click.option("--priority", type=int, default=0, help="Source priority (lower = higher priority)")
-def add_source(feed_name, url, priority):
-    """Add a source URL to an existing feed."""
+@entries.command("list")
+@click.option("--feed", help="Filter by feed name")
+@click.option("--limit", type=int, default=20, help="Number of entries to show")
+@click.option("--offset", type=int, default=0, help="Number of entries to skip")
+@click.option("--since", help="Show entries since date (ISO format)")
+@click.option("--until", help="Show entries until date (ISO format)")
+def list_entries(feed, limit, offset, since, until):
+    """List RSS entries."""
     try:
-        storage = get_storage()
-
-        # Check if feed exists
-        feed = storage.get_feed(feed_name)
-        if not feed:
-            click.echo(f"Error: Feed '{feed_name}' not found", err=True)
-            sys.exit(1)
-
-        # Create source
-        source = RSSSource(
-            feed_name=feed_name,
-            url=url,
-            priority=priority,
-        )
-
-        if storage.create_source(source):
-            click.echo(f"✓ Added source {url} to feed '{feed_name}'")
-        else:
-            click.echo(f"Error: Source already exists or failed to create", err=True)
-            sys.exit(1)
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@source.command("remove")
-@click.argument("feed_name")
-@click.argument("url")
-@click.confirmation_option(prompt="Are you sure you want to remove this source?")
-def remove_source(feed_name, url):
-    """Remove a source URL from a feed."""
-    try:
-        storage = get_storage()
-
-        if storage.delete_source(feed_name, url):
-            click.echo(f"✓ Removed source {url} from feed '{feed_name}'")
-        else:
-            click.echo(f"Error: Source not found", err=True)
-            sys.exit(1)
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@cli.command()
-@click.option("--feed", help="Specific feed to fetch")
-@click.option("--concurrent", type=int, help="Max concurrent fetches")
-def fetch(feed, concurrent):
-    """Fetch RSS feeds."""
-
-    async def do_fetch():
-        try:
-            storage = get_storage()
-            config_manager = get_config_manager()
-
-            if concurrent:
-                config_manager.update(max_concurrent_fetches=concurrent)
-
-            fetcher = FeedFetcher(config_manager.config, storage)
-
-            try:
-                if feed:
-                    # Fetch specific feed
-                    success, message = await fetcher.refresh_feed(feed)
-                    if success:
-                        click.echo(f"✓ {message}")
-                    else:
-                        click.echo(f"✗ {message}", err=True)
-                        sys.exit(1)
-                else:
-                    # Fetch all active feeds
-                    results = await fetcher.refresh_all_feeds()
-
-                    success_count = 0
-                    for feed_name, success, message in results:
-                        status = "✓" if success else "✗"
-                        click.echo(f"{status} {message}")
-                        if success:
-                            success_count += 1
-
-                    click.echo(f"\n{success_count}/{len(results)} feeds updated successfully")
-
-            finally:
-                await fetcher.close()
-
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
-            sys.exit(1)
-
-    asyncio.run(do_fetch())
-
-
-@cli.command()
-@click.option("--feed", help="Show entries for specific feed")
-@click.option("--since", help='Show entries since date/time (e.g. "2023-01-01", "1 day ago")')
-@click.option("--until", help="Show entries until date/time")
-@click.option("--limit", type=int, default=20, help="Maximum number of entries")
-@click.option("--verbose", "-v", is_flag=True, help="Show full entry details")
-def entries(feed, since, until, limit, verbose):
-    """Show RSS entries."""
-    try:
-        storage = get_storage()
+        _, _, cache_storage = get_user_resources()
 
         # Parse date filters
-        start_time = None
-        end_time = None
-
+        since_dt = None
+        until_dt = None
         if since:
-            start_time = parse_date_filter(since)
-
+            since_dt = date_parser.parse(since)
         if until:
-            end_time = parse_date_filter(until)
+            until_dt = date_parser.parse(until)
 
-        # Get entries
-        entries = storage.get_entries(
-            feed_name=feed, start_time=start_time, end_time=end_time, limit=limit
+        entries = cache_storage.get_entries(
+            feed_name=feed, limit=limit, offset=offset, since=since_dt, until=until_dt
         )
 
         if not entries:
@@ -327,84 +301,53 @@ def entries(feed, since, until, limit, verbose):
             return
 
         for entry in entries:
-            pub_date = entry.effective_published.strftime("%Y-%m-%d %H:%M")
-
-            if verbose:
-                click.echo(f"\n📰 {entry.title}")
-                click.echo(f"   Feed: {entry.feed_name}")
-                click.echo(f"   Published: {pub_date}")
-                click.echo(f"   Link: {entry.link}")
-                if entry.author:
-                    click.echo(f"   Author: {entry.author}")
-                if entry.tags:
-                    click.echo(f"   Tags: {', '.join(entry.tags)}")
-                click.echo(f"   Summary: {entry.get_truncated_summary(200)}")
-            else:
-                click.echo(f"{pub_date} | {entry.feed_name:15} | {entry.title}")
+            published = entry.effective_published.strftime("%Y-%m-%d %H:%M")
+            click.echo(f"[{published}] {entry.feed_name}: {entry.title}")
+            if entry.author:
+                click.echo(f"  Author: {entry.author}")
+            if entry.tags:
+                click.echo(f"  Tags: {', '.join(entry.tags)}")
+            click.echo(f"  Link: {entry.link}")
+            click.echo(f"  Summary: {entry.get_truncated_summary(100)}")
+            click.echo()
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-@cli.command()
-@click.option("--feed", help="Show stats for specific feed")
-def stats(feed):
-    """Show RSS statistics."""
+@entries.command("count")
+@click.option("--feed", help="Filter by feed name")
+def count_entries(feed):
+    """Count RSS entries."""
     try:
-        storage = get_storage()
+        _, _, cache_storage = get_user_resources()
+        count = cache_storage.get_entry_count(feed_name=feed)
 
         if feed:
-            # Check if feed exists
-            feed_obj = storage.get_feed(feed)
-            if not feed_obj:
-                click.echo(f"Error: Feed '{feed}' not found", err=True)
-                sys.exit(1)
-            
-            # Show stats for specific feed
-            stats = storage.get_feed_stats(feed)
-            click.echo(f"📊 Statistics for feed '{feed}':")
-            click.echo(f"   Total entries: {stats.total_entries}")
-            click.echo(f"   Last 24h: {stats.entries_last_24h}")
-            click.echo(f"   Last 7 days: {stats.entries_last_7d}")
-            click.echo(f"   Active sources: {stats.active_sources}")
-            click.echo(f"   Healthy sources: {stats.healthy_sources}")
-            if stats.last_success:
-                click.echo(f"   Last success: {stats.last_success}")
+            click.echo(f"Feed '{feed}': {count} entries")
         else:
-            # Show overall stats
-            feeds = storage.list_feeds()
-            active_feeds = [f for f in feeds if f.active]
-            total_entries = sum(f.entry_count for f in feeds)
-
-            click.echo("📊 Overall Statistics:")
-            click.echo(f"   Total feeds: {len(feeds)}")
-            click.echo(f"   Active feeds: {len(active_feeds)}")
-            click.echo(f"   Total entries: {total_entries}")
-
-            # Show top feeds by entry count
-            if feeds:
-                top_feeds = sorted(feeds, key=lambda f: f.entry_count, reverse=True)[:5]
-                click.echo("\n   Top feeds by entry count:")
-                for feed in top_feeds:
-                    status = "🟢" if feed.active else "🔴"
-                    click.echo(f"     {status} {feed.name}: {feed.entry_count} entries")
+            click.echo(f"Total entries: {count}")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-@cli.command()
-@click.option("--days", type=int, default=90, help="Remove entries older than N days")
-@click.confirmation_option(prompt="Are you sure you want to delete old entries?")
-def cleanup(days):
+@entries.command("cleanup")
+@click.option("--days", type=int, default=30, help="Remove entries older than N days")
+@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
+def cleanup_entries(days, confirm):
     """Clean up old RSS entries."""
     try:
-        storage = get_storage()
+        _, _, cache_storage = get_user_resources()
 
-        count = storage.cleanup_old_entries(days)
-        click.echo(f"✓ Removed {count} old entries (older than {days} days)")
+        if not confirm:
+            if not click.confirm(f"Remove entries older than {days} days?"):
+                return
+
+        removed_count = cache_storage.cleanup_old_entries(days)
+        click.echo(f"✓ Removed {removed_count} old entries")
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -413,190 +356,93 @@ def cleanup(days):
 
 @cli.group()
 def serve():
-    """Start MCP server."""
+    """Server management commands."""
 
 
 @serve.command("stdio")
 def serve_stdio():
-    """Start MCP server in stdio mode with FastMCP multi-user support."""
-    from .fastmcp_multiuser_v2 import run_fastmcp_stdio
-
+    """Run the MCP server in stdio mode."""
     try:
-        asyncio.run(run_fastmcp_stdio())
-    except KeyboardInterrupt:
-        click.echo("\nServer stopped")
-    except Exception as e:
-        click.echo(f"Server error: {e}", err=True)
-        sys.exit(1)
+        from .server import run_stdio
 
-
-@serve.command("http")
-@click.option("--host", default="127.0.0.1", help="Host to bind to")
-@click.option("--port", type=int, default=8080, help="Port to bind to")
-def serve_http(host, port):
-    """Start MCP server in HTTP mode with FastMCP multi-user support."""
-    from .fastmcp_multiuser_v2 import run_fastmcp_http
-    
-    try:
-        click.echo(f"Starting FastMCP RSS server in HTTP mode on {host}:{port}")
-        click.echo(f"MCP endpoint will be available at http://{host}:{port}/mcp")
-        click.echo("Send X-User-ID header to identify different users")
-        asyncio.run(run_fastmcp_http(host, port))
-    except KeyboardInterrupt:
-        click.echo("\nServer stopped")
-    except Exception as e:
-        click.echo(f"Server error: {e}", err=True)
-        sys.exit(1)
-
-
-@serve.command("test-client")
-@click.option("--host", default="127.0.0.1", help="Server host to connect to")
-@click.option("--port", type=int, default=8080, help="Server port to connect to")
-@click.option("--user-id", default="cli_test_user", help="User ID to use in headers")
-def test_client(host, port, user_id):
-    """Test FastMCP client functionality with headers."""
-    async def run_test():
-        try:
-            from fastmcp.client import Client, StreamableHttpTransport
-            
-            # Create custom transport with headers
-            class HeadersAwareHttpTransport(StreamableHttpTransport):
-                def __init__(self, base_url: str, user_id: str):
-                    super().__init__(base_url)
-                    self.user_id = user_id
-                
-                def _get_headers(self):
-                    headers = super()._get_headers() if hasattr(super(), '_get_headers') else {}
-                    headers["X-User-ID"] = self.user_id
-                    return headers
-            
-            base_url = f"http://{host}:{port}/mcp"
-            transport = HeadersAwareHttpTransport(base_url, user_id)
-            client = Client(transport=transport)
-            
-            click.echo(f"Testing FastMCP client connection to {base_url}")
-            click.echo(f"Using User ID: {user_id}")
-            
-            async with client:
-                # Test ping
-                await client.ping()
-                click.echo("✓ Ping successful")
-                
-                # List tools
-                tools = await client.list_tools()
-                click.echo(f"✓ Found {len(tools)} tools:")
-                for tool in tools[:5]:  # Show first 5
-                    click.echo(f"  - {tool.name}: {tool.description}")
-                
-                # Test basic operations
-                feeds_result = await client.call_tool("list_feeds", {})
-                click.echo(f"✓ Listed feeds for user {feeds_result['user_id']}")
-                click.echo(f"  Current feeds: {len(feeds_result['feeds'])}")
-                
-                # Add a test feed
-                add_result = await client.call_tool("add_feed", {
-                    "name": "cli_test_feed",
-                    "title": "CLI Test Feed",
-                    "description": "Test feed created by CLI client"
-                })
-                if add_result["success"]:
-                    click.echo(f"✓ Created test feed: {add_result['feed_name']}")
-                else:
-                    click.echo(f"⚠ Feed creation failed or already exists: {add_result.get('error', 'unknown error')}")
-                
-                # Get stats
-                stats_result = await client.call_tool("get_feed_stats", {})
-                click.echo(f"✓ Overall stats: {stats_result['total_feeds']} feeds, {stats_result['total_entries']} entries")
-                
-                click.echo(f"\n🎉 FastMCP client test completed successfully for user: {user_id}")
-                
-        except Exception as e:
-            click.echo(f"❌ Client test failed: {e}", err=True)
-            sys.exit(1)
-    
-    try:
-        asyncio.run(run_test())
-    except KeyboardInterrupt:
-        click.echo("\nTest interrupted")
-    except Exception as e:
-        click.echo(f"Test error: {e}", err=True)
-        sys.exit(1)
-
-
-@cli.command()
-@click.option("--key", help="Configuration key to get/set")
-@click.option("--value", help="Value to set (omit to get current value)")
-def config(key, value):
-    """Get or set configuration values."""
-    try:
-        config_manager = get_config_manager()
-
-        if not key:
-            # Show all config
-            click.echo("Current configuration:")
-            for k, v in config_manager.config.to_dict().items():
-                click.echo(f"  {k}: {v}")
-        elif not value:
-            # Get specific key
-            if hasattr(config_manager.config, key):
-                click.echo(f"{key}: {getattr(config_manager.config, key)}")
-            else:
-                click.echo(f"Error: Unknown config key '{key}'", err=True)
-                sys.exit(1)
-        else:
-            # Set key=value
-            try:
-                # Try to convert to appropriate type
-                current_val = getattr(config_manager.config, key, None)
-                if isinstance(current_val, int):
-                    value = int(value)
-                elif isinstance(current_val, bool):
-                    value = value.lower() in ("true", "1", "yes", "on")
-
-                config_manager.update(**{key: value})
-                click.echo(f"✓ Set {key} = {value}")
-
-            except ValueError as e:
-                click.echo(f"Error: Invalid value for {key}: {e}", err=True)
-                sys.exit(1)
-            except Exception as e:
-                click.echo(f"Error: {e}", err=True)
-                sys.exit(1)
-
+        asyncio.run(run_stdio())
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
-def parse_date_filter(date_str: str) -> datetime:
-    """Parse date filter string."""
-    date_str = date_str.strip().lower()
-
-    # Handle relative dates
-    if "ago" in date_str:
-        parts = date_str.replace("ago", "").strip().split()
-        if len(parts) == 2:
-            try:
-                num = int(parts[0])
-                unit = parts[1].rstrip("s")  # Remove plural 's'
-
-                now = datetime.now()
-                if unit in ("day", "days"):
-                    return now - timedelta(days=num)
-                elif unit in ("hour", "hours"):
-                    return now - timedelta(hours=num)
-                elif unit in ("week", "weeks"):
-                    return now - timedelta(weeks=num)
-                elif unit in ("month", "months"):
-                    return now - timedelta(days=num * 30)
-            except ValueError:
-                pass
-
-    # Parse absolute date
+@serve.command("http")
+@click.option("--host", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", type=int, default=8000, help="Port to bind to")
+def serve_http(host, port):
+    """Run the MCP server in HTTP mode with modern transport support."""
     try:
-        return date_parser.parse(date_str)
-    except Exception:
-        raise ValueError(f"Cannot parse date: {date_str}")
+        from .server import run_http_with_sse
+
+        click.echo(f"Starting HTTP server on {host}:{port}")
+        click.echo(f"  Modern HTTP transport with automatic protocol negotiation")
+        asyncio.run(run_http_with_sse(host, port))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("stats")
+@click.option("--feed", help="Show stats for specific feed")
+def show_stats(feed):
+    """Show feed statistics."""
+    try:
+        user_manager, _, cache_storage = get_user_resources()
+
+        if feed:
+            # Specific feed stats
+            feeds = user_manager.get_feeds()
+            if not any(f.name == feed for f in feeds):
+                click.echo(f"Error: Feed '{feed}' not found", err=True)
+                sys.exit(1)
+
+            total_entries = cache_storage.get_entry_count(feed)
+
+            # Get recent entries
+            now = datetime.now()
+            entries_24h = cache_storage.get_entries(
+                feed_name=feed, since=now - timedelta(hours=24), limit=1000
+            )
+            entries_7d = cache_storage.get_entries(
+                feed_name=feed, since=now - timedelta(days=7), limit=1000
+            )
+
+            click.echo(f"Feed: {feed}")
+            click.echo(f"Total entries: {total_entries}")
+            click.echo(f"Last 24h: {len(entries_24h)} entries")
+            click.echo(f"Last 7d: {len(entries_7d)} entries")
+        else:
+            # Overall stats
+            feeds = user_manager.get_feeds()
+            total_feeds = len(feeds)
+            total_entries = cache_storage.get_entry_count()
+
+            # Get recent entries
+            now = datetime.now()
+            entries_24h = cache_storage.get_entries(since=now - timedelta(hours=24), limit=1000)
+            entries_7d = cache_storage.get_entries(since=now - timedelta(days=7), limit=1000)
+
+            click.echo("RSS MCP Statistics")
+            click.echo("-" * 20)
+            click.echo(f"Total feeds: {total_feeds}")
+            click.echo(f"Total entries: {total_entries}")
+            click.echo(f"Last 24h: {len(entries_24h)} entries")
+            click.echo(f"Last 7d: {len(entries_7d)} entries")
+
+            if feeds:
+                click.echo("\nPer-feed stats:")
+                for feed_config in feeds:
+                    feed_entries = cache_storage.get_entry_count(feed_config.name)
+                    click.echo(f"  {feed_config.name}: {feed_entries} entries")
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

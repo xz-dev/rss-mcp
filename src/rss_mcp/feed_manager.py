@@ -1,4 +1,4 @@
-"""RSS feed fetching and management with failover support."""
+"""RSS feed fetching and management with the new config-based architecture."""
 
 import asyncio
 import logging
@@ -9,27 +9,49 @@ import aiohttp
 import feedparser
 from dateutil import parser as date_parser
 
-from .config import RSSConfig
-from .models import RSSEntry, RSSFeed
-from .storage import RSSStorage
+from .cache_storage import CacheStorage
+from .config import Config, RSSFeedConfig
+from .models import RSSEntry
+from .user_rss_manager import UserRssManager
 
 logger = logging.getLogger(__name__)
 
 
-class FeedFetcher:
-    """Handles RSS feed fetching with failover support."""
+class FeedManager:
+    """Manages RSS feed fetching, parsing, and entry storage."""
 
-    def __init__(self, config: RSSConfig, storage: RSSStorage):
-        """Initialize feed fetcher."""
+    def __init__(
+        self,
+        user_manager: UserRssManager,
+        cache_storage: CacheStorage,
+        config: Config,
+        request_timeout: int = 30,
+        user_agent: str = "RSS-MCP/1.0",
+        max_concurrent_fetches: int = 5,
+    ):
+        """Initialize feed manager.
+
+        Args:
+            user_manager: User RSS configuration manager
+            cache_storage: Cache storage for entries
+            config: Global configuration
+            request_timeout: HTTP request timeout in seconds
+            user_agent: User agent string for requests
+            max_concurrent_fetches: Maximum concurrent feed fetches
+        """
+        self.user_manager = user_manager
+        self.cache_storage = cache_storage
         self.config = config
-        self.storage = storage
+        self.request_timeout = request_timeout
+        self.user_agent = user_agent
+        self.max_concurrent_fetches = max_concurrent_fetches
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.config.request_timeout)
-            headers = {"User-Agent": self.config.user_agent}
+            timeout = aiohttp.ClientTimeout(total=self.request_timeout)
+            headers = {"User-Agent": self.user_agent}
             self._session = aiohttp.ClientSession(timeout=timeout, headers=headers)
         return self._session
 
@@ -53,7 +75,7 @@ class FeedFetcher:
         """
         # Check cache first if enabled
         if use_cache:
-            cached_data = self.storage.get_cached_feed_content(url, cache_hours)
+            cached_data = self.cache_storage.get_cached_feed_content(url, cache_hours)
             if cached_data:
                 logger.info(f"Using cached content for {url}")
                 return True, cached_data["content"], None
@@ -64,7 +86,7 @@ class FeedFetcher:
             # Build headers for conditional requests
             headers = {}
             if use_cache:
-                cached_data = self.storage.get_cached_feed_content(
+                cached_data = self.cache_storage.get_cached_feed_content(
                     url, max_age_hours=24 * 7
                 )  # Check cache up to 1 week
                 if cached_data:
@@ -76,7 +98,9 @@ class FeedFetcher:
             async with session.get(url, headers=headers) as response:
                 if response.status == 304:
                     # Not modified, use cached content
-                    cached_data = self.storage.get_cached_feed_content(url, max_age_hours=24 * 7)
+                    cached_data = self.cache_storage.get_cached_feed_content(
+                        url, max_age_hours=24 * 7
+                    )
                     if cached_data:
                         logger.info(f"Content not modified for {url}, using cache")
                         return True, cached_data["content"], None
@@ -99,7 +123,7 @@ class FeedFetcher:
                                 pass
 
                         etag = response.headers.get("etag")
-                        self.storage.cache_feed_content(url, content, last_modified, etag)
+                        self.cache_storage.cache_feed_content(url, content, last_modified, etag)
 
                     return True, content, None
                 else:
@@ -245,8 +269,13 @@ class FeedFetcher:
 
         return None
 
-    async def fetch_feed_with_failover(self, feed: RSSFeed) -> Tuple[bool, List[RSSEntry], str]:
-        """Fetch feed using failover between sources.
+    async def fetch_feed_with_sources(
+        self, feed_config: RSSFeedConfig
+    ) -> Tuple[bool, List[RSSEntry], str]:
+        """Fetch feed using all configured sources.
+
+        Args:
+            feed_config: RSS feed configuration
 
         Returns:
             (success, entries, status_message)
@@ -254,146 +283,72 @@ class FeedFetcher:
         entries = []
         last_error = "No sources available"
 
-        # Get healthy sources ordered by priority
-        sources = feed.healthy_sources
-        if not sources:
-            # Try all sources if no healthy ones
-            sources = [s for s in feed.sources if s.active]
+        if not feed_config.sources:
+            return False, [], "No sources configured"
 
-        if not sources:
-            return False, [], "No active sources configured"
-
-        for source in sources:
-            logger.info(f"Fetching {feed.name} from {source.url}")
-
-            # Update source fetch time
-            source.last_fetch = datetime.now()
-            self.storage.update_source(source)
+        # Try each source URL
+        for source_url in feed_config.sources:
+            logger.info(f"Fetching {feed_config.name} from {source_url}")
 
             # Fetch content
-            success, content, error = await self.fetch_feed_content(source.url)
+            success, content, error = await self.fetch_feed_content(source_url)
 
             if not success:
-                # Update source error info
-                source.error_count += 1
-                source.last_error = error
-                self.storage.update_source(source)
-
-                last_error = f"Source {source.url}: {error}"
-                logger.warning(f"Failed to fetch from {source.url}: {error}")
+                last_error = f"Source {source_url}: {error}"
+                logger.warning(f"Failed to fetch from {source_url}: {error}")
                 continue
 
             # Parse content
-            success, parsed_feed, error = self.parse_feed_content(content, source.url)
+            success, parsed_feed, error = self.parse_feed_content(content, source_url)
 
             if not success:
-                # Update source error info
-                source.error_count += 1
-                source.last_error = error
-                self.storage.update_source(source)
-
-                last_error = f"Source {source.url}: {error}"
-                logger.warning(f"Failed to parse from {source.url}: {error}")
+                last_error = f"Source {source_url}: {error}"
+                logger.warning(f"Failed to parse from {source_url}: {error}")
                 continue
 
             # Extract entries
             try:
-                entries = self.extract_entries(parsed_feed, feed.name, source.url)
+                entries = self.extract_entries(parsed_feed, feed_config.name, source_url)
 
-                # Update feed metadata from successful source
-                if hasattr(parsed_feed.feed, "title") and parsed_feed.feed.title:
-                    feed.remote_title = parsed_feed.feed.title  # Save remote title separately
-                if hasattr(parsed_feed.feed, "description") and parsed_feed.feed.description:
-                    feed.description = parsed_feed.feed.description
-                if hasattr(parsed_feed.feed, "link") and parsed_feed.feed.link:
-                    feed.link = parsed_feed.feed.link
-
-                # Update source success info
-                source.last_success = datetime.now()
-                source.error_count = 0
-                source.last_error = None
-                self.storage.update_source(source)
-
-                # Update feed success info
-                feed.last_success = datetime.now()
-                self.storage.update_feed(feed)
-
-                logger.info(f"Successfully fetched {len(entries)} entries from {source.url}")
-                return True, entries, f"Fetched {len(entries)} entries from {source.url}"
+                logger.info(f"Successfully fetched {len(entries)} entries from {source_url}")
+                return True, entries, f"Fetched {len(entries)} entries from {source_url}"
 
             except Exception as e:
-                source.error_count += 1
-                source.last_error = str(e)
-                self.storage.update_source(source)
-
-                last_error = f"Source {source.url}: {str(e)}"
-                logger.error(f"Error processing entries from {source.url}: {e}")
+                last_error = f"Source {source_url}: {str(e)}"
+                logger.error(f"Error processing entries from {source_url}: {e}")
                 continue
 
         return False, [], last_error
 
-    async def store_entries(self, entries: List[RSSEntry]) -> int:
-        """Store entries in database, avoiding duplicates.
-
-        Returns:
-            Number of new entries stored.
-        """
-        new_count = 0
-
-        for entry in entries:
-            if self.storage.create_entry(entry):
-                new_count += 1
-            else:
-                logger.debug(f"Entry already exists: {entry.guid}")
-
-        return new_count
-
-    async def fetch_feed(self, feed_name: str) -> int:
-        """Fetch a single feed and return new entry count.
-
-        Returns:
-            Number of new entries fetched.
-        """
-        success, message = await self.refresh_feed(feed_name)
-        if success:
-            # Extract new count from message (format: "Feed 'name': X new entries (total: Y)")
-            import re
-            match = re.search(r"(\d+) new entries", message)
-            if match:
-                return int(match.group(1))
-        return 0
-
     async def refresh_feed(self, feed_name: str) -> Tuple[bool, str]:
         """Refresh a single feed.
+
+        Args:
+            feed_name: Name of the feed to refresh
 
         Returns:
             (success, status_message)
         """
-        feed = self.storage.get_feed(feed_name)
-        if not feed:
+        # Get feed configuration
+        feeds = self.user_manager.get_feeds()
+        feed_config = None
+        for feed in feeds:
+            if feed.name == feed_name:
+                feed_config = feed
+                break
+
+        if not feed_config:
             return False, f"Feed '{feed_name}' not found"
 
-        if not feed.active:
-            return False, f"Feed '{feed_name}' is disabled"
-
-        # Update feed fetch time
-        feed.last_fetch = datetime.now()
-        self.storage.update_feed(feed)
-
         # Fetch entries
-        success, entries, message = await self.fetch_feed_with_failover(feed)
+        success, entries, message = await self.fetch_feed_with_sources(feed_config)
 
         if success:
             # Store new entries
-            new_count = await self.store_entries(entries)
+            new_count = self.cache_storage.store_entries(entries)
+            total_count = self.cache_storage.get_entry_count(feed_name=feed_name)
 
-            # Update feed entry count
-            feed.entry_count = self.storage.get_entry_count(feed_name=feed_name)
-            self.storage.update_feed(feed)
-
-            final_message = (
-                f"Feed '{feed_name}': {new_count} new entries (total: {feed.entry_count})"
-            )
+            final_message = f"Feed '{feed_name}': {new_count} new entries (total: {total_count})"
             return True, final_message
         else:
             return False, f"Feed '{feed_name}': {message}"
@@ -404,17 +359,22 @@ class FeedFetcher:
         """Refresh multiple feeds concurrently.
 
         Args:
-            feed_names: Specific feeds to refresh, or None for all active feeds
+            feed_names: Specific feeds to refresh, or None for all feeds
 
         Returns:
             List of (feed_name, success, message) tuples
         """
+        feeds = self.user_manager.get_feeds()
+
         if feed_names is None:
-            feeds = self.storage.list_feeds(active_only=True)
             feed_names = [feed.name for feed in feeds]
+        else:
+            # Filter to only existing feeds
+            existing_names = {feed.name for feed in feeds}
+            feed_names = [name for name in feed_names if name in existing_names]
 
         # Limit concurrent fetches
-        semaphore = asyncio.Semaphore(self.config.max_concurrent_fetches)
+        semaphore = asyncio.Semaphore(self.max_concurrent_fetches)
 
         async def refresh_with_semaphore(feed_name: str) -> Tuple[str, bool, str]:
             async with semaphore:
@@ -435,6 +395,25 @@ class FeedFetcher:
 
         return final_results
 
-    def cleanup_old_entries(self) -> int:
-        """Clean up old entries based on config."""
-        return self.storage.cleanup_old_entries(self.config.cleanup_days)
+    async def fetch_feed_entries(self, feed_name: str) -> int:
+        """Fetch a single feed and return new entry count.
+
+        Args:
+            feed_name: Name of the feed to fetch
+
+        Returns:
+            Number of new entries fetched
+        """
+        success, message = await self.refresh_feed(feed_name)
+        if success:
+            # Extract new count from message (format: "Feed 'name': X new entries (total: Y)")
+            import re
+
+            match = re.search(r"(\d+) new entries", message)
+            if match:
+                return int(match.group(1))
+        return 0
+
+    def cleanup_old_entries(self, days: int = 30) -> int:
+        """Clean up old entries based on age."""
+        return self.cache_storage.cleanup_old_entries(days)

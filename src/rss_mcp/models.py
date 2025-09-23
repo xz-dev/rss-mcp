@@ -3,86 +3,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
-from urllib.parse import urlparse
-
-
-@dataclass
-class RSSSource:
-    """Represents a single RSS source URL."""
-
-    id: Optional[str] = None
-    feed_name: str = ""
-    url: str = ""
-    priority: int = 0  # Lower values have higher priority
-    active: bool = True
-    last_fetch: Optional[datetime] = None
-    last_success: Optional[datetime] = None
-    error_count: int = 0
-    last_error: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.now)
-
-    def __post_init__(self):
-        """Validate the source URL."""
-        if self.url:
-            parsed = urlparse(self.url)
-            if not parsed.scheme or not parsed.netloc:
-                raise ValueError(f"Invalid URL: {self.url}")
-
-    @property
-    def is_healthy(self) -> bool:
-        """Check if the source is considered healthy."""
-        # Consider unhealthy if more than 5 consecutive errors
-        return self.error_count < 5
-    
-    @property
-    def enabled(self) -> bool:
-        """Alias for active property."""
-        return self.active
-
-
-@dataclass
-class RSSFeed:
-    """Represents an RSS feed with multiple sources."""
-
-    name: str = ""
-    title: str = ""
-    remote_title: str = ""  # Title from RSS feed source
-    description: str = ""
-    link: str = ""
-    sources: List[RSSSource] = field(default_factory=list)
-    active: bool = True
-    fetch_interval: int = 3600  # seconds
-    last_fetch: Optional[datetime] = None
-    last_success: Optional[datetime] = None
-    entry_count: int = 0
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
-
-    def __post_init__(self):
-        """Validate the feed."""
-        if not self.name:
-            raise ValueError("Feed name cannot be empty")
-        if not self.title:
-            self.title = self.name
-
-    @property
-    def primary_source(self) -> Optional[RSSSource]:
-        """Get the primary (highest priority) active source."""
-        active_sources = [s for s in self.sources if s.active and s.is_healthy]
-        if not active_sources:
-            return None
-        return min(active_sources, key=lambda s: s.priority)
-
-    @property
-    def healthy_sources(self) -> List[RSSSource]:
-        """Get all healthy, active sources ordered by priority."""
-        active_sources = [s for s in self.sources if s.active and s.is_healthy]
-        return sorted(active_sources, key=lambda s: s.priority)
-    
-    @property
-    def enabled(self) -> bool:
-        """Alias for active property."""
-        return self.active
 
 
 @dataclass
@@ -148,8 +68,8 @@ class FeedStats:
     total_entries: int = 0
     entries_last_24h: int = 0
     entries_last_7d: int = 0
-    last_fetch: Optional[datetime] = None
-    last_success: Optional[datetime] = None
-    active_sources: int = 0
-    healthy_sources: int = 0
-    avg_fetch_time: float = 0.0  # seconds
+    last_updated: Optional[datetime] = None
+    last_fetch_attempt: Optional[datetime] = None
+    last_successful_fetch: Optional[datetime] = None
+    fetch_success_rate: float = 0.0  # Percentage
+    average_entries_per_day: float = 0.0
