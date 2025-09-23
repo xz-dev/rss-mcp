@@ -259,10 +259,10 @@ async def refresh_feeds(feed_name: Optional[str] = None) -> dict:
 
     for feed_name_result, success, message in results:
         if success:
-            # Extract new count from message
+            # Extract stored count from message
             import re
 
-            match = re.search(r"(\d+) new entries", message)
+            match = re.search(r"(\d+) entries stored", message)
             if match:
                 total_entries += int(match.group(1))
         else:
@@ -273,7 +273,7 @@ async def refresh_feeds(feed_name: Optional[str] = None) -> dict:
         "feed_name": feed_name,
         "feeds_total": total_feeds,
         "feeds_processed": feeds_processed,
-        "total_new_entries": total_entries,
+        "total_entries_stored": total_entries,
         "errors": errors,
         "success": feeds_processed > 0,
     }

@@ -39,7 +39,8 @@ def feed():
 @click.option("--title", help="Feed title")
 @click.option("--description", help="Feed description")
 @click.option("--interval", type=int, default=3600, help="Fetch interval in seconds")
-def add_feed(name, url, title, description, interval):
+@click.option("--retention", type=int, default=2592000, help="Entry retention period in seconds (default: 30 days)")
+def add_feed(name, url, title, description, interval, retention):
     """Add a new RSS feed with source URL."""
     try:
         user_manager, _, _ = get_user_resources()
@@ -57,6 +58,7 @@ def add_feed(name, url, title, description, interval):
             description=description or "",
             sources=[url],
             fetch_interval=interval,
+            retention_period=retention,
         )
 
         # Add to configuration
@@ -96,6 +98,8 @@ def list_feeds(verbose):
                     click.echo(f"    {i+1}. {source}")
                 click.echo(f"  Entries: {entry_count}")
                 click.echo(f"  Fetch Interval: {feed.fetch_interval}s")
+                retention_days = getattr(feed, 'retention_period', 2592000) / 86400
+                click.echo(f"  Retention Period: {retention_days:.1f} days")
                 click.echo()
             else:
                 click.echo(f"{status} {feed.name} ({entry_count} entries)")
@@ -333,25 +337,6 @@ def count_entries(feed):
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-
-@entries.command("cleanup")
-@click.option("--days", type=int, default=30, help="Remove entries older than N days")
-@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
-def cleanup_entries(days, confirm):
-    """Clean up old RSS entries."""
-    try:
-        _, _, cache_storage = get_user_resources()
-
-        if not confirm:
-            if not click.confirm(f"Remove entries older than {days} days?"):
-                return
-
-        removed_count = cache_storage.cleanup_old_entries(days)
-        click.echo(f"✓ Removed {removed_count} old entries")
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
 
 
 @cli.group()

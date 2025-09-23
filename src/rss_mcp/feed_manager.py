@@ -344,11 +344,15 @@ class FeedManager:
         success, entries, message = await self.fetch_feed_with_sources(feed_config)
 
         if success:
-            # Store new entries
-            new_count = self.cache_storage.store_entries(entries)
+            # Clean up old entries based on feed's retention period before storing new ones
+            retention_period = getattr(feed_config, 'retention_period', 2592000)  # Default 30 days
+            self.cache_storage.cleanup_old_entries(retention_seconds=retention_period)
+            
+            # Store new entries (now accumulating instead of skipping duplicates)
+            stored_count = self.cache_storage.store_entries(entries)
             total_count = self.cache_storage.get_entry_count(feed_name=feed_name)
 
-            final_message = f"Feed '{feed_name}': {new_count} new entries (total: {total_count})"
+            final_message = f"Feed '{feed_name}': {stored_count} entries stored (total: {total_count})"
             return True, final_message
         else:
             return False, f"Feed '{feed_name}': {message}"
@@ -406,14 +410,11 @@ class FeedManager:
         """
         success, message = await self.refresh_feed(feed_name)
         if success:
-            # Extract new count from message (format: "Feed 'name': X new entries (total: Y)")
+            # Extract stored count from message (format: "Feed 'name': X entries stored (total: Y)")
             import re
 
-            match = re.search(r"(\d+) new entries", message)
+            match = re.search(r"(\d+) entries stored", message)
             if match:
                 return int(match.group(1))
         return 0
 
-    def cleanup_old_entries(self, days: int = 30) -> int:
-        """Clean up old entries based on age."""
-        return self.cache_storage.cleanup_old_entries(days)

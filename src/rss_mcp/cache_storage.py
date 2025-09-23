@@ -50,24 +50,23 @@ class CacheStorage:
             return None
 
     def store_entries(self, entries: List[RSSEntry]) -> int:
-        """Store RSS entries, avoiding duplicates.
+        """Store RSS entries, accumulating all entries including duplicates.
 
         Args:
             entries: List of RSS entries to store
 
         Returns:
-            Number of new entries stored
+            Number of entries stored
         """
         new_count = 0
 
         for entry in entries:
-            # Create entry file based on feed name and guid hash
+            # Create entry file based on feed name, guid hash, and timestamp
             guid_hash = hashlib.sha256(entry.guid.encode()).hexdigest()[:16]
-            entry_file = self.entries_dir / f"{entry.feed_name}_{guid_hash}.json"
+            timestamp = int(entry.created_at.timestamp())
+            entry_file = self.entries_dir / f"{entry.feed_name}_{guid_hash}_{timestamp}.json"
 
-            # Skip if entry already exists
-            if entry_file.exists():
-                continue
+            # Always store entries (accumulate instead of skip duplicates)
 
             # Store entry data
             entry_data = {
@@ -190,16 +189,16 @@ class CacheStorage:
 
         return count
 
-    def cleanup_old_entries(self, days: int = 30) -> int:
-        """Remove entries older than specified days.
+    def cleanup_old_entries(self, retention_seconds: int = 2592000) -> int:
+        """Remove entries older than specified retention period.
 
         Args:
-            days: Number of days to keep entries
+            retention_seconds: Number of seconds to keep entries (default: 30 days)
 
         Returns:
             Number of entries removed
         """
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=retention_seconds)
         removed_count = 0
 
         for entry_file in self.entries_dir.glob("*.json"):
@@ -229,6 +228,7 @@ class CacheStorage:
         """
         deleted_count = 0
 
+        # Handle both old format (feed_name_hash.json) and new format (feed_name_hash_timestamp.json)
         for entry_file in self.entries_dir.glob(f"{feed_name}_*.json"):
             try:
                 entry_file.unlink()
@@ -238,6 +238,69 @@ class CacheStorage:
                 continue
 
         return deleted_count
+
+    def cleanup_duplicate_entries(self, feed_name: Optional[str] = None, keep_latest: int = 1) -> int:
+        """Clean up duplicate entries, keeping only the most recent versions.
+
+        Args:
+            feed_name: Filter by specific feed name, None for all feeds
+            keep_latest: Number of latest versions to keep for each GUID (default: 1)
+
+        Returns:
+            Number of entries removed
+        """
+        removed_count = 0
+        
+        # Group entries by feed_name and guid_hash
+        entry_groups = {}
+        pattern = f"{feed_name}_*.json" if feed_name else "*.json"
+        
+        for entry_file in self.entries_dir.glob(pattern):
+            try:
+                # Parse filename: feed_name_hash_timestamp.json or feed_name_hash.json (old format)
+                filename = entry_file.stem
+                parts = filename.split("_")
+                
+                if len(parts) >= 3:  # New format with timestamp
+                    feed = "_".join(parts[:-2])  # Handle feed names with underscores
+                    guid_hash = parts[-2]
+                    timestamp = int(parts[-1])
+                elif len(parts) >= 2:  # Old format without timestamp  
+                    feed = "_".join(parts[:-1])
+                    guid_hash = parts[-1]
+                    timestamp = 0  # Old entries get timestamp 0
+                else:
+                    continue
+                
+                if feed_name and feed != feed_name:
+                    continue
+                    
+                key = f"{feed}_{guid_hash}"
+                if key not in entry_groups:
+                    entry_groups[key] = []
+                entry_groups[key].append((timestamp, entry_file))
+                
+            except (ValueError, IndexError):
+                # Skip files with invalid format
+                continue
+        
+        # For each group, keep only the latest entries
+        for group_entries in entry_groups.values():
+            if len(group_entries) <= keep_latest:
+                continue
+                
+            # Sort by timestamp (newest first)
+            group_entries.sort(key=lambda x: x[0], reverse=True)
+            
+            # Remove older entries
+            for _, entry_file in group_entries[keep_latest:]:
+                try:
+                    entry_file.unlink()
+                    removed_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to delete duplicate entry {entry_file}: {e}")
+                    
+        return removed_count
 
     # Feed content caching methods
     def cache_feed_content(

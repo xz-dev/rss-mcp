@@ -62,6 +62,7 @@ class RSSFeedConfig:
     description: str
     sources: List[str]
     fetch_interval: int = 3600
+    retention_period: int = 2592000  # 30 days in seconds (30 * 24 * 60 * 60)
 
 
 class Config:
