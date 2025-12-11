@@ -1,5 +1,5 @@
 # RSS MCP Server Container
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Create application directories
 RUN mkdir -p /app/config /app/cache
